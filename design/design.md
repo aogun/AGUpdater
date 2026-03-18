@@ -802,24 +802,17 @@ AGUpdater/
 │       ├── index.html
 │       └── ...
 ├── client/
-│   ├── CMakeLists.txt
-│   ├── lib/
-│   │   ├── CMakeLists.txt      # 静态库构建
-│   │   ├── include/
-│   │   │   └── ag_updater.h    # 公开头文件
-│   │   └── src/
-│   │       ├── ag_updater.cpp  # 库实现
-│   │       ├── http_client.h/cpp  # HTTPS 请求
-│   │       ├── auth.h/cpp      # HMAC 校验生成
-│   │       └── version_util.h/cpp
-│   ├── manager/
-│   │   ├── CMakeLists.txt      # 版本管理工具构建
-│   │   └── src/
-│   │       └── main.cpp
-│   └── updater/
-│       ├── CMakeLists.txt      # 更新程序构建
+│   ├── CMakeLists.txt          # 客户端统一构建（库 + manager + updater）
+│   ├── manager_main.cpp        # 版本管理工具入口
+│   ├── updater_main.cpp        # 更新程序入口
+│   └── lib/
+│       ├── include/
+│       │   └── ag_updater.h    # 公开头文件
 │       └── src/
-│           └── main.cpp
+│           ├── ag_updater.cpp  # 库实现
+│           ├── http_client.h/cpp  # HTTP(S) 请求
+│           ├── auth.h/cpp      # HMAC 校验生成
+│           └── version_util.h/cpp
 └── third_party/                # 第三方依赖
     ├── sqlite3/
     ├── cpp-httplib/            # HTTP(S) 服务器/客户端
