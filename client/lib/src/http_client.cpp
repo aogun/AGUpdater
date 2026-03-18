@@ -16,14 +16,14 @@
 #define AG_SERVER_URL "https://localhost:8443"
 #endif
 
-/* Parse host and port from AG_SERVER_URL */
-static bool parse_server_url(std::string &host, int &port)
+/* Parse host, port, and scheme from AG_SERVER_URL */
+static bool parse_server_url(std::string &scheme, std::string &host, int &port)
 {
     std::string url = AG_SERVER_URL;
     LOG_DEBUG("parse_server_url: parsing %s", url.c_str());
 
     /* Strip scheme */
-    std::string scheme;
+    scheme = "https";
     size_t scheme_end = url.find("://");
     if (scheme_end != std::string::npos) {
         scheme = url.substr(0, scheme_end);
@@ -40,20 +40,42 @@ static bool parse_server_url(std::string &host, int &port)
         port = (scheme == "https") ? 443 : 80;
     }
 
-    LOG_DEBUG("parse_server_url: host=%s, port=%d", host.c_str(), port);
+    LOG_DEBUG("parse_server_url: scheme=%s, host=%s, port=%d",
+              scheme.c_str(), host.c_str(), port);
     return !host.empty() && port > 0;
 }
 
-static httplib::SSLClient *create_client()
+/* Whether AG_SERVER_URL uses HTTPS */
+static bool is_https()
 {
-    std::string host;
+    std::string url = AG_SERVER_URL;
+    return url.compare(0, 8, "https://") == 0;
+}
+
+static httplib::Client *create_plain_client()
+{
+    std::string scheme, host;
     int port;
-    if (!parse_server_url(host, port)) {
+    if (!parse_server_url(scheme, host, port)) {
         LOG_ERROR("create_client: failed to parse server URL");
         return NULL;
     }
+    LOG_DEBUG("create_client: HTTP connecting to %s:%d", host.c_str(), port);
+    httplib::Client *cli = new httplib::Client(host, port);
+    cli->set_connection_timeout(10, 0);
+    cli->set_read_timeout(30, 0);
+    return cli;
+}
 
-    LOG_DEBUG("create_client: connecting to %s:%d", host.c_str(), port);
+static httplib::SSLClient *create_ssl_client()
+{
+    std::string scheme, host;
+    int port;
+    if (!parse_server_url(scheme, host, port)) {
+        LOG_ERROR("create_client: failed to parse server URL");
+        return NULL;
+    }
+    LOG_DEBUG("create_client: HTTPS connecting to %s:%d", host.c_str(), port);
     httplib::SSLClient *cli = new httplib::SSLClient(host, port);
     /* SSL certificate verification is enabled by default.
      * For development/debugging, temporarily set to false:
@@ -63,22 +85,14 @@ static httplib::SSLClient *create_client()
     return cli;
 }
 
-HttpResult http_get(const std::string &path)
+template<typename ClientType>
+static HttpResult http_get_impl(const std::string &path, ClientType *cli)
 {
     HttpResult result;
     result.status_code = 0;
     result.ok = false;
 
-    httplib::SSLClient *cli = create_client();
-    if (cli == NULL) {
-        result.error = "failed to create HTTP client";
-        LOG_ERROR("http_get: failed to create HTTP client");
-        return result;
-    }
-
-    /* Generate X-Auth header */
     std::string xauth = ag_generate_xauth();
-
     httplib::Headers headers;
     headers.emplace("X-Auth", xauth);
 
@@ -99,23 +113,27 @@ HttpResult http_get(const std::string &path)
     return result;
 }
 
-bool http_download(const std::string &path,
-                   const std::string &dest_file,
-                   int64_t expected_size,
-                   ProgressCallback progress_cb,
-                   std::string &err_msg)
+HttpResult http_get(const std::string &path)
 {
-    LOG_DEBUG("http_download: path=%s, dest=%s, expected_size=%lld",
-              path.c_str(), dest_file.c_str(), (long long)expected_size);
-
-    httplib::SSLClient *cli = create_client();
-    if (cli == NULL) {
-        err_msg = "failed to create HTTP client";
-        LOG_ERROR("http_download: failed to create HTTP client");
-        return false;
+    if (is_https()) {
+        httplib::SSLClient *cli = create_ssl_client();
+        if (!cli) { HttpResult r; r.status_code = 0; r.ok = false; r.error = "failed to create HTTP client"; LOG_ERROR("http_get: %s", r.error.c_str()); return r; }
+        return http_get_impl(path, cli);
+    } else {
+        httplib::Client *cli = create_plain_client();
+        if (!cli) { HttpResult r; r.status_code = 0; r.ok = false; r.error = "failed to create HTTP client"; LOG_ERROR("http_get: %s", r.error.c_str()); return r; }
+        return http_get_impl(path, cli);
     }
+}
 
-    /* Longer timeout for downloads */
+template<typename ClientType>
+static bool http_download_impl(const std::string &path,
+                               const std::string &dest_file,
+                               int64_t expected_size,
+                               ProgressCallback progress_cb,
+                               std::string &err_msg,
+                               ClientType *cli)
+{
     cli->set_read_timeout(300, 0);
 
     std::string xauth = ag_generate_xauth();
@@ -144,8 +162,6 @@ bool http_download(const std::string &path,
             LOG_TRACE("http_download: received %lld / %lld bytes",
                       (long long)downloaded, (long long)expected_size);
             if (progress_cb) {
-                /* Throttle progress callbacks to at most once per 500ms
-                 * to avoid flooding the UI thread with messages */
                 auto now = std::chrono::steady_clock::now();
                 auto elapsed = std::chrono::duration_cast<
                     std::chrono::milliseconds>(now - last_cb_time).count();
@@ -183,4 +199,24 @@ bool http_download(const std::string &path,
 
     LOG_DEBUG("http_download: download complete, %lld bytes", (long long)downloaded);
     return true;
+}
+
+bool http_download(const std::string &path,
+                   const std::string &dest_file,
+                   int64_t expected_size,
+                   ProgressCallback progress_cb,
+                   std::string &err_msg)
+{
+    LOG_DEBUG("http_download: path=%s, dest=%s, expected_size=%lld",
+              path.c_str(), dest_file.c_str(), (long long)expected_size);
+
+    if (is_https()) {
+        httplib::SSLClient *cli = create_ssl_client();
+        if (!cli) { err_msg = "failed to create HTTP client"; LOG_ERROR("http_download: %s", err_msg.c_str()); return false; }
+        return http_download_impl(path, dest_file, expected_size, progress_cb, err_msg, cli);
+    } else {
+        httplib::Client *cli = create_plain_client();
+        if (!cli) { err_msg = "failed to create HTTP client"; LOG_ERROR("http_download: %s", err_msg.c_str()); return false; }
+        return http_download_impl(path, dest_file, expected_size, progress_cb, err_msg, cli);
+    }
 }
