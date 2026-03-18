@@ -19,6 +19,23 @@
 
 #pragma comment(lib, "comctl32.lib")
 
+/* UTF-8 to wide string conversion */
+static std::wstring utf8_to_wide(const char *utf8)
+{
+    if (!utf8 || !utf8[0]) return std::wstring();
+    int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (len <= 0) return std::wstring();
+    std::wstring ws(len, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, &ws[0], len);
+    ws.resize(len - 1); /* remove null terminator */
+    return ws;
+}
+
+static std::wstring utf8_to_wide(const std::string &utf8)
+{
+    return utf8_to_wide(utf8.c_str());
+}
+
 /* Control IDs */
 #define IDC_LIST_VERSIONS   1001
 #define IDC_BTN_REFRESH     1002
@@ -86,22 +103,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     InitCommonControlsEx(&icex);
 
     /* Register window class */
-    WNDCLASSEXA wc;
+    WNDCLASSEXW wc;
     memset(&wc, 0, sizeof(wc));
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszClassName = "AGManagerClass";
+    wc.lpszClassName = L"AGManagerClass";
     wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-    RegisterClassExA(&wc);
+    RegisterClassExW(&wc);
 
     /* Create main window */
-    char title[64];
-    snprintf(title, sizeof(title), "AGUpdater Manager v%s", APP_VERSION_STRING);
+    std::wstring title = utf8_to_wide(
+        std::string("AGUpdater Manager v") + APP_VERSION_STRING);
 
-    g_hwnd = CreateWindowExA(0, "AGManagerClass", title,
+    g_hwnd = CreateWindowExW(0, L"AGManagerClass", title.c_str(),
         WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, WIN_W, WIN_H,
         NULL, NULL, hInstance, NULL);
@@ -115,9 +132,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 
     /* Message loop */
     MSG msg;
-    while (GetMessageA(&msg, NULL, 0, 0)) {
+    while (GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
-        DispatchMessageA(&msg);
+        DispatchMessageW(&msg);
     }
 
     return (int)msg.wParam;
@@ -127,8 +144,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 {
     switch (msg) {
     case WM_CREATE: {
-        /* Version list (ListView) */
-        g_list = CreateWindowExA(WS_EX_CLIENTEDGE, WC_LISTVIEWA, "",
+        /* Version list (ListView) - use W version for Unicode */
+        g_list = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
             WS_CHILD | WS_VISIBLE | WS_BORDER |
             LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
             10, 10, WIN_W - 40, 240,
@@ -138,41 +155,41 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
 
         /* Add columns */
-        LVCOLUMNA col;
+        LVCOLUMNW col;
         memset(&col, 0, sizeof(col));
         col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
 
-        col.cx = 80;  col.pszText = (LPSTR)"Version";  col.iSubItem = 0;
-        ListView_InsertColumn(g_list, 0, &col);
+        col.cx = 80;  col.pszText = (LPWSTR)L"Version";     col.iSubItem = 0;
+        SendMessageW(g_list, LVM_INSERTCOLUMNW, 0, (LPARAM)&col);
 
-        col.cx = 240; col.pszText = (LPSTR)"Description"; col.iSubItem = 1;
-        ListView_InsertColumn(g_list, 1, &col);
+        col.cx = 240; col.pszText = (LPWSTR)L"Description"; col.iSubItem = 1;
+        SendMessageW(g_list, LVM_INSERTCOLUMNW, 1, (LPARAM)&col);
 
-        col.cx = 80;  col.pszText = (LPSTR)"Size";     col.iSubItem = 2;
-        ListView_InsertColumn(g_list, 2, &col);
+        col.cx = 80;  col.pszText = (LPWSTR)L"Size";        col.iSubItem = 2;
+        SendMessageW(g_list, LVM_INSERTCOLUMNW, 2, (LPARAM)&col);
 
-        col.cx = 140; col.pszText = (LPSTR)"Date";     col.iSubItem = 3;
-        ListView_InsertColumn(g_list, 3, &col);
+        col.cx = 140; col.pszText = (LPWSTR)L"Date";        col.iSubItem = 3;
+        SendMessageW(g_list, LVM_INSERTCOLUMNW, 3, (LPARAM)&col);
 
         /* Refresh button */
-        g_btn_refresh = CreateWindowA("BUTTON", "Refresh",
+        g_btn_refresh = CreateWindowW(L"BUTTON", L"Refresh",
             WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
             10, 260, 80, 28, hwnd, (HMENU)IDC_BTN_REFRESH, g_hinst, NULL);
 
         /* Download button */
-        g_btn_download = CreateWindowA("BUTTON", "Download",
+        g_btn_download = CreateWindowW(L"BUTTON", L"Download",
             WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
             100, 260, 80, 28, hwnd, (HMENU)IDC_BTN_DOWNLOAD, g_hinst, NULL);
         EnableWindow(g_btn_download, FALSE);
 
         /* Detail area */
-        g_detail = CreateWindowExA(WS_EX_CLIENTEDGE, "STATIC", "",
+        g_detail = CreateWindowExW(WS_EX_CLIENTEDGE, L"STATIC", L"",
             WS_CHILD | WS_VISIBLE | SS_LEFT,
             10, 300, WIN_W - 40, 100,
             hwnd, (HMENU)IDC_STATIC_DETAIL, g_hinst, NULL);
 
         /* Progress bar */
-        g_progress = CreateWindowExA(0, PROGRESS_CLASSA, "",
+        g_progress = CreateWindowExW(0, PROGRESS_CLASSW, L"",
             WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
             10, 410, WIN_W - 40, 20,
             hwnd, (HMENU)IDC_PROGRESS, g_hinst, NULL);
@@ -210,13 +227,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     case WM_CHECK_ERROR: {
         LOG_ERROR("Failed to check for updates");
-        SetWindowTextA(g_detail, "Failed to check for updates.");
+        SetWindowTextW(g_detail, L"Failed to check for updates.");
         break;
     }
 
     case WM_CHECK_DONE: {
         /* Populate ListView from g_versions (filled by background thread) */
-        ListView_DeleteAllItems(g_list);
+        SendMessageW(g_list, LVM_DELETEALLITEMS, 0, 0);
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             for (int i = 0; i < (int)g_versions.size(); ++i) {
@@ -224,9 +241,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
         }
         if (g_versions.empty()) {
-            SetWindowTextA(g_detail, "No versions available.");
+            SetWindowTextW(g_detail, L"No versions available.");
         } else {
-            SetWindowTextA(g_detail, "Select a version to see details.");
+            SetWindowTextW(g_detail, L"Select a version to see details.");
         }
         break;
     }
@@ -236,7 +253,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         SendMessage(g_progress, PBM_SETPOS, 0, 0);
         EnableWindow(g_btn_download, TRUE);
         EnableWindow(g_btn_refresh, TRUE);
-        MessageBoxA(hwnd, "Download failed.", "Error", MB_OK | MB_ICONERROR);
+        MessageBoxW(hwnd, L"Download failed.", L"Error", MB_OK | MB_ICONERROR);
         break;
     }
 
@@ -259,10 +276,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             fp = g_dl_file_path;
         }
 
-        int result = MessageBoxA(hwnd,
-            "Download complete. Install now?\n"
-            "The application will close to apply the update.",
-            "Install Update", MB_YESNO | MB_ICONQUESTION);
+        int result = MessageBoxW(hwnd,
+            L"Download complete. Install now?\n"
+            L"The application will close to apply the update.",
+            L"Install Update", MB_YESNO | MB_ICONQUESTION);
 
         if (result == IDYES) {
             ag_error_t err = ag_apply_update(fp.c_str());
@@ -271,8 +288,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 PostQuitMessage(0);
             } else {
                 LOG_ERROR("Failed to start updater, error=%d", (int)err);
-                MessageBoxA(hwnd, "Failed to start updater.",
-                           "Error", MB_OK | MB_ICONERROR);
+                MessageBoxW(hwnd, L"Failed to start updater.",
+                           L"Error", MB_OK | MB_ICONERROR);
             }
         }
 
@@ -287,49 +304,57 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         break;
 
     default:
-        return DefWindowProcA(hwnd, msg, wParam, lParam);
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
     return 0;
 }
 
+static void lv_set_item_text_w(HWND list, int item, int sub, const wchar_t *text)
+{
+    LVITEMW lvi;
+    memset(&lvi, 0, sizeof(lvi));
+    lvi.iSubItem = sub;
+    lvi.pszText = (LPWSTR)text;
+    SendMessageW(list, LVM_SETITEMTEXTW, (WPARAM)item, (LPARAM)&lvi);
+}
+
 static void add_list_item(int index, const ag_version_info_t &info)
 {
-    LVITEMA item;
+    std::wstring ver_w = utf8_to_wide(info.version);
+    LVITEMW item;
     memset(&item, 0, sizeof(item));
     item.mask = LVIF_TEXT;
     item.iItem = index;
     item.iSubItem = 0;
-    item.pszText = (LPSTR)info.version;
-    ListView_InsertItem(g_list, &item);
+    item.pszText = (LPWSTR)ver_w.c_str();
+    SendMessageW(g_list, LVM_INSERTITEMW, 0, (LPARAM)&item);
 
-    ListView_SetItemText(g_list, index, 1, (LPSTR)info.description);
+    std::wstring desc_w = utf8_to_wide(info.description);
+    lv_set_item_text_w(g_list, index, 1, desc_w.c_str());
 
-    std::string size_str = format_size(info.file_size);
-    ListView_SetItemText(g_list, index, 2, (LPSTR)size_str.c_str());
+    std::wstring size_w = utf8_to_wide(format_size(info.file_size));
+    lv_set_item_text_w(g_list, index, 2, size_w.c_str());
 
-    ListView_SetItemText(g_list, index, 3, (LPSTR)info.created_at);
+    std::wstring date_w = utf8_to_wide(info.created_at);
+    lv_set_item_text_w(g_list, index, 3, date_w.c_str());
 }
 
 static void update_detail()
 {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_selected < 0 || g_selected >= (int)g_versions.size()) {
-        SetWindowTextA(g_detail, "Select a version to see details.");
+        SetWindowTextW(g_detail, L"Select a version to see details.");
         return;
     }
 
     const ag_version_info_t &v = g_versions[g_selected];
-    char buf[2048];
-    snprintf(buf, sizeof(buf),
-        "Version: %s\r\n"
-        "Description: %s\r\n"
-        "Size: %s\r\n"
-        "SHA256: %s\r\n"
-        "Date: %s",
-        v.version, v.description,
-        format_size(v.file_size).c_str(),
-        v.file_sha256, v.created_at);
-    SetWindowTextA(g_detail, buf);
+    std::wstring text =
+        L"Version: " + utf8_to_wide(v.version) + L"\r\n" +
+        L"Description: " + utf8_to_wide(v.description) + L"\r\n" +
+        L"Size: " + utf8_to_wide(format_size(v.file_size)) + L"\r\n" +
+        L"SHA256: " + utf8_to_wide(v.file_sha256) + L"\r\n" +
+        L"Date: " + utf8_to_wide(v.created_at);
+    SetWindowTextW(g_detail, text.c_str());
 }
 
 /* Callback for ag_check_update — runs on background thread */
@@ -362,7 +387,7 @@ static void on_check_callback(ag_error_t error, const ag_version_info_t *info,
 static void do_refresh()
 {
     LOG_DEBUG("do_refresh: checking for updates");
-    SetWindowTextA(g_detail, "Loading...");
+    SetWindowTextW(g_detail, L"Loading...");
     ListView_DeleteAllItems(g_list);
     g_selected = -1;
     EnableWindow(g_btn_download, FALSE);
