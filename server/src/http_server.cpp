@@ -86,35 +86,53 @@ int get_query_int(const httplib::Request &req, const std::string &key, int def)
     return int_result;
 }
 
-bool start_server(AppContext &ctx)
+static void setup_and_run(httplib::Server &svr, AppContext &ctx)
 {
-    httplib::SSLServer svr(ctx.config.tls.cert_file.c_str(),
-                           ctx.config.tls.key_file.c_str());
-
-    if (!svr.is_valid()) {
-        fprintf(stderr, "Failed to initialize SSL server. "
-                "Check cert_file and key_file paths.\n");
-        return false;
-    }
-
-    /* Set max payload size */
     svr.set_payload_max_length(
         static_cast<size_t>(ctx.config.max_upload_size_mb) * 1024 * 1024);
 
-    /* Serve static files for web admin */
     svr.set_mount_point("/", "./web");
 
-    /* Register API routes */
     register_admin_routes(svr, ctx);
     register_client_routes(svr, ctx);
+}
 
-    fprintf(stdout, "AGUpdater server starting on %s:%d\n",
-            ctx.config.host.c_str(), ctx.config.port);
+bool start_server(AppContext &ctx)
+{
+    if (ctx.config.tls_enabled) {
+        httplib::SSLServer svr(ctx.config.tls.cert_file.c_str(),
+                               ctx.config.tls.key_file.c_str());
 
-    bool ok = svr.listen(ctx.config.host.c_str(), ctx.config.port);
-    if (!ok) {
-        fprintf(stderr, "Server failed to start on %s:%d\n",
+        if (!svr.is_valid()) {
+            fprintf(stderr, "Failed to initialize SSL server. "
+                    "Check cert_file and key_file paths.\n");
+            return false;
+        }
+
+        setup_and_run(svr, ctx);
+
+        fprintf(stdout, "AGUpdater server starting on https://%s:%d\n",
                 ctx.config.host.c_str(), ctx.config.port);
+
+        bool ok = svr.listen(ctx.config.host.c_str(), ctx.config.port);
+        if (!ok) {
+            fprintf(stderr, "Server failed to start on %s:%d\n",
+                    ctx.config.host.c_str(), ctx.config.port);
+        }
+        return ok;
+    } else {
+        httplib::Server svr;
+
+        setup_and_run(svr, ctx);
+
+        fprintf(stdout, "AGUpdater server starting on http://%s:%d\n",
+                ctx.config.host.c_str(), ctx.config.port);
+
+        bool ok = svr.listen(ctx.config.host.c_str(), ctx.config.port);
+        if (!ok) {
+            fprintf(stderr, "Server failed to start on %s:%d\n",
+                    ctx.config.host.c_str(), ctx.config.port);
+        }
+        return ok;
     }
-    return ok;
 }

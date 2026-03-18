@@ -9,8 +9,9 @@ ServerConfig config_defaults()
     ServerConfig cfg;
     cfg.host = "0.0.0.0";
     cfg.port = 8443;
-    cfg.tls.cert_file = "server.crt";
-    cfg.tls.key_file = "server.key";
+    cfg.tls_enabled = false;
+    cfg.tls.cert_file = "";
+    cfg.tls.key_file = "";
     cfg.admin.username = "admin";
     cfg.admin.password_hash = "";
     cfg.secret = "";
@@ -88,10 +89,12 @@ bool config_load(const std::string &path, ServerConfig &out, std::string &err_ms
 
     const cJSON *tls_obj = cJSON_GetObjectItemCaseSensitive(root, "tls");
     if (cJSON_IsObject(tls_obj)) {
-        out.tls.cert_file = json_get_string(tls_obj, "cert_file",
-                                            defaults.tls.cert_file);
-        out.tls.key_file = json_get_string(tls_obj, "key_file",
-                                           defaults.tls.key_file);
+        out.tls.cert_file = json_get_string(tls_obj, "cert_file", "");
+        out.tls.key_file = json_get_string(tls_obj, "key_file", "");
+        out.tls_enabled = !out.tls.cert_file.empty() &&
+                          !out.tls.key_file.empty();
+    } else {
+        out.tls_enabled = false;
     }
 
     const cJSON *admin_obj = cJSON_GetObjectItemCaseSensitive(root, "admin");

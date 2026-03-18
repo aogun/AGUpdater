@@ -16,6 +16,7 @@ struct AdminConfig {
 struct ServerConfig {
     std::string host;
     int port;
+    bool tls_enabled;
     TlsConfig tls;
     AdminConfig admin;
     std::string secret;
