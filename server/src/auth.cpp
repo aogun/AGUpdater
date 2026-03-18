@@ -288,6 +288,11 @@ bool ClientAuth::verify_xauth(const std::string &xauth_json,
     std::string msg = dev_id + std::string(ts_buf) + nonce;
     std::string expected_sign = hmac_sha256_hex(secret_, msg);
 
+    LOG_DEBUG("X-Auth HMAC check: device='%s', ts=%lld, nonce='%s', msg='%s'",
+              dev_id.c_str(), timestamp, nonce.c_str(), msg.c_str());
+    LOG_DEBUG("X-Auth HMAC check: secret_len=%zu, expected='%s', received='%s'",
+              secret_.size(), expected_sign.c_str(), sign.c_str());
+
     if (sign.size() != expected_sign.size() ||
         CRYPTO_memcmp(sign.c_str(), expected_sign.c_str(), sign.size()) != 0) {
         err_msg = "signature mismatch";

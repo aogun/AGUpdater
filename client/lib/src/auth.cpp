@@ -101,6 +101,7 @@ std::string ag_generate_xauth()
     std::string msg = device_id + std::string(ts_buf) + nonce;
 
     /* Compute HMAC-SHA256 sign */
+    LOG_DEBUG("ag_generate_xauth: msg='%s', secret_len=%zu", msg.c_str(), strlen(AG_SECRET));
     std::string sign = ag_hmac_sha256_hex(AG_SECRET, msg);
 
     /* Build JSON */
