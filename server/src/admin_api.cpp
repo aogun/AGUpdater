@@ -7,6 +7,9 @@
 #include <cstring>
 #include <string>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 
 /* Zip magic number: PK\x03\x04 */
 static bool is_zip_file(const std::string &data)
@@ -18,8 +21,8 @@ static bool is_zip_file(const std::string &data)
 
 static bool ensure_directory(const std::string &path)
 {
-#if defined(_WIN32) && !defined(__MINGW32__)
-    return _mkdir(path.c_str()) == 0 || errno == EEXIST;
+#ifdef _WIN32
+    return mkdir(path.c_str()) == 0 || errno == EEXIST;
 #else
     return mkdir(path.c_str(), 0755) == 0 || errno == EEXIST;
 #endif

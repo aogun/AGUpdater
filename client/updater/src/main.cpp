@@ -95,8 +95,8 @@ static bool make_dirs(const std::string &path)
         char c = path[i];
         if (c == '/' || c == '\\') {
             if (!dir.empty()) {
-#if defined(_WIN32) && !defined(__MINGW32__)
-                _mkdir(dir.c_str());
+#ifdef _WIN32
+                mkdir(dir.c_str());
 #else
                 mkdir(dir.c_str(), 0755);
 #endif
