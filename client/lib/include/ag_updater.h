@@ -65,8 +65,13 @@ ag_error_t ag_download_update(
     void *user_data
 );
 
+/**
+ * @param zip_path       下载的 zip 文件路径
+ * @param launch_after   更新完成后要启动的程序名（可为 NULL 表示不启动）
+ */
 ag_error_t ag_apply_update(
-    const char *zip_path
+    const char *zip_path,
+    const char *launch_after
 );
 
 #ifdef __cplusplus

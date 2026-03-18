@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -107,7 +108,7 @@ static bool make_dirs(const std::string &path)
     }
     if (!dir.empty()) {
 #ifdef _WIN32
-        _mkdir(dir.c_str());
+        mkdir(dir.c_str());
 #else
         mkdir(dir.c_str(), 0755);
 #endif
@@ -228,17 +229,62 @@ static bool extract_file(unzFile zf, const std::string &dest_path)
     return ok;
 }
 
+static bool launch_program(const std::string &dir, const std::string &program)
+{
+#ifdef _WIN32
+    std::string full_path = dir + std::string(1, PATH_SEP) + program;
+    LOG_INFO("Launching: %s", full_path.c_str());
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+
+    std::string cmd = "\"" + full_path + "\"";
+    std::vector<char> cmd_buf(cmd.begin(), cmd.end());
+    cmd_buf.push_back('\0');
+
+    if (!CreateProcessA(NULL, &cmd_buf[0], NULL, NULL, FALSE,
+                        0, NULL, dir.c_str(), &si, &pi)) {
+        LOG_ERROR("Failed to launch: %s (error=%lu)", full_path.c_str(), GetLastError());
+        return false;
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return true;
+#else
+    std::string full_path = dir + std::string(1, PATH_SEP) + program;
+    LOG_INFO("Launching: %s", full_path.c_str());
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl(full_path.c_str(), program.c_str(), (char *)NULL);
+        _exit(1);
+    }
+    return pid > 0;
+#endif
+}
+
 int main(int argc, char *argv[])
 {
     log_init_file("ag-updater.log");
     LOG_INFO("ag-updater v%s", APP_VERSION_STRING);
 
     if (argc < 2) {
-        LOG_ERROR("Usage: ag-updater <zip_path>");
+        LOG_ERROR("Usage: ag-updater <zip_path> [--launch <program>]");
         return 1;
     }
 
     std::string zip_path = argv[1];
+    std::string launch_app;
+
+    /* Parse optional arguments */
+    for (int i = 2; i < argc; ++i) {
+        if (std::string(argv[i]) == "--launch" && i + 1 < argc) {
+            launch_app = argv[++i];
+        }
+    }
+
     std::string target_dir = get_exe_dir(argv[0]);
     std::string self_name = get_exe_name();
 
@@ -353,5 +399,13 @@ int main(int argc, char *argv[])
         LOG_INFO("Deleted: %s", zip_path.c_str());
     }
 
+    /* Launch specified program after update */
+    if (!launch_app.empty() && errors == 0) {
+        if (!launch_program(target_dir, launch_app)) {
+            LOG_ERROR("Failed to launch: %s", launch_app.c_str());
+        }
+    }
+
+    log_shutdown_file();
     return errors > 0 ? 1 : 0;
 }

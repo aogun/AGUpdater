@@ -308,7 +308,7 @@ ag_error_t ag_download_update(
 
 /* ---- ag_apply_update ---- */
 
-ag_error_t ag_apply_update(const char *zip_path)
+ag_error_t ag_apply_update(const char *zip_path, const char *launch_after)
 {
     if (!zip_path || !zip_path[0]) {
         LOG_ERROR("ag_apply_update: invalid zip_path");
@@ -316,6 +316,9 @@ ag_error_t ag_apply_update(const char *zip_path)
     }
 
     LOG_INFO("ag_apply_update: applying update from %s", zip_path);
+    if (launch_after && launch_after[0]) {
+        LOG_INFO("ag_apply_update: will launch '%s' after update", launch_after);
+    }
 
     /* Find ag-updater executable in same directory as current exe */
     std::string exe_dir = get_exe_dir();
@@ -333,11 +336,13 @@ ag_error_t ag_apply_update(const char *zip_path)
         return AG_ERR_NOT_FOUND;
     }
 
-    /* Launch updater process.
-     * Use lpApplicationName to specify the executable path directly,
-     * and lpCommandLine for arguments only, to prevent command injection. */
+    /* Build command line */
     std::string cmd_args = "\"" + updater_path + "\" \"" +
                            std::string(zip_path) + "\"";
+    if (launch_after && launch_after[0]) {
+        cmd_args += " --launch \"" + std::string(launch_after) + "\"";
+    }
+
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     memset(&si, 0, sizeof(si));
@@ -370,7 +375,12 @@ ag_error_t ag_apply_update(const char *zip_path)
         LOG_INFO("ag_apply_update: updater process launched (pid=%d)", pid);
     }
     if (pid == 0) {
-        execl(updater_path.c_str(), updater_path.c_str(), zip_path, NULL);
+        if (launch_after && launch_after[0]) {
+            execl(updater_path.c_str(), updater_path.c_str(),
+                  zip_path, "--launch", launch_after, NULL);
+        } else {
+            execl(updater_path.c_str(), updater_path.c_str(), zip_path, NULL);
+        }
         _exit(1);
     }
 #endif

@@ -282,7 +282,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             L"Install Update", MB_YESNO | MB_ICONQUESTION);
 
         if (result == IDYES) {
-            ag_error_t err = ag_apply_update(fp.c_str());
+            ag_error_t err = ag_apply_update(fp.c_str(), NULL);
             if (err == AG_OK) {
                 LOG_INFO("Updater launched, exiting manager");
                 PostQuitMessage(0);
