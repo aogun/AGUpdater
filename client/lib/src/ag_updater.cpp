@@ -11,7 +11,7 @@
 #include <vector>
 #include <thread>
 
-#include <openssl/sha.h>
+#include <openssl/evp.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -235,24 +235,26 @@ ag_error_t ag_download_update(
             return;
         }
 
-        /* Stream file in chunks for SHA256 to avoid large allocations
-         * and ftell overflow on files > 2GB */
-        SHA256_CTX sha_ctx;
-        SHA256_Init(&sha_ctx);
+        /* Stream file in chunks for SHA256 using EVP API (OpenSSL 3.0+)
+         * to avoid large allocations and ftell overflow on files > 2GB */
+        EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+        EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL);
         char sha_buf[65536];
         size_t sha_n;
         while ((sha_n = fread(sha_buf, 1, sizeof(sha_buf), f)) > 0) {
-            SHA256_Update(&sha_ctx, sha_buf, sha_n);
+            EVP_DigestUpdate(mdctx, sha_buf, sha_n);
         }
-        unsigned char hash[SHA256_DIGEST_LENGTH];
-        SHA256_Final(hash, &sha_ctx);
+        unsigned char hash[EVP_MAX_MD_SIZE];
+        unsigned int hash_len = 0;
+        EVP_DigestFinal_ex(mdctx, hash, &hash_len);
+        EVP_MD_CTX_free(mdctx);
         fclose(f);
 
-        char hex[SHA256_DIGEST_LENGTH * 2 + 1];
-        for (int hi = 0; hi < SHA256_DIGEST_LENGTH; ++hi) {
+        char hex[EVP_MAX_MD_SIZE * 2 + 1];
+        for (unsigned int hi = 0; hi < hash_len; ++hi) {
             snprintf(hex + hi * 2, 3, "%02x", hash[hi]);
         }
-        std::string actual_sha(hex, SHA256_DIGEST_LENGTH * 2);
+        std::string actual_sha(hex, hash_len * 2);
 
         if (actual_sha != std::string(info_copy.file_sha256)) {
             remove(file_path.c_str());
