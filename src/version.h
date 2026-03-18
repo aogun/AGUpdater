@@ -3,7 +3,7 @@
 
 #define APP_VERSION_MAJOR 0
 #define APP_VERSION_MINOR 1
-#define APP_VERSION_PATCH 8
+#define APP_VERSION_PATCH 9
 
 #define AG_STRINGIFY_(x) #x
 #define AG_STRINGIFY(x) AG_STRINGIFY_(x)

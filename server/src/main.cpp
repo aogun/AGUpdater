@@ -16,6 +16,13 @@ int main(int argc, char *argv[])
 {
     fprintf(stdout, "AGUpdater Server v%s\n", APP_VERSION_STRING);
 
+    /* Tool mode: -p <password> generates password_hash for config.json */
+    if (argc >= 3 && std::string(argv[1]) == "-p") {
+        std::string hash = sha256_hex(argv[2]);
+        fprintf(stdout, "password_hash: %s\n", hash.c_str());
+        return 0;
+    }
+
     /* Determine config file path */
     std::string config_path = "config.json";
     if (argc > 1) {

@@ -63,6 +63,22 @@ AGUpdater 是一个自动更新系统，由以下组件构成：
 
 ### 3.1 配置文件
 
+**命令行用法：**
+
+```
+ag-server [config_path]     # 启动服务器，默认读取 config.json
+ag-server -p <password>     # 工具模式：生成 password_hash 值
+```
+
+使用 `-p` 参数可生成 `admin.password_hash` 字段所需的值：
+
+```bash
+$ ag-server -p admin123
+password_hash: 240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9
+```
+
+**配置文件格式：**
+
 服务器启动时读取配置文件 `config.json`：
 
 ```json
