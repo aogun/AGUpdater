@@ -553,16 +553,15 @@ ag_error_t ag_download_update(
 
 /**
  * 启动更新程序执行安装
- * 启动 ag-updater 可执行文件，传入 zip 文件路径和目标目录，
- * 然后当前进程应退出以允许文件覆盖。
+ * 启动 ag-updater 可执行文件，传入 zip 文件路径，
+ * ag-updater 会将 zip 内第一个目录下的文件解压覆盖到自身所在目录。
+ * 调用后当前进程应退出以允许文件覆盖。
  *
  * @param zip_path    下载的 zip 文件路径
- * @param target_dir  目标安装目录
  * @return AG_OK 表示更新程序已启动，其他表示错误
  */
 ag_error_t ag_apply_update(
-    const char *zip_path,
-    const char *target_dir
+    const char *zip_path
 );
 ```
 
@@ -587,7 +586,7 @@ ag_error_t ag_apply_update(
     │  callback(OK, file_path)     │                          │
     │◄─────────────────────────────┤                          │
     │                              │                          │
-    │  ag_apply_update(zip, dir)   │                          │
+    │  ag_apply_update(zip)        │                          │
     ├─────────────────────────────►│                          │
     │  启动 ag-updater             │                          │
     │  进程退出                    │                          │
@@ -604,28 +603,28 @@ ag_error_t ag_apply_update(
 ### 5.2 命令行参数
 
 ```
-ag-updater --zip <zip_path> --target <target_dir> [--app-name <name>] [--version <ver>]
+ag-updater <zip_path>
 ```
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| --zip | 是 | zip 文件路径 |
-| --target | 是 | 目标安装目录 |
-| --app-name | 否 | 程序名称（用于定位 zip 内子目录） |
-| --version | 否 | 版本号（用于定位 zip 内子目录） |
+| 参数 | 说明 |
+|------|------|
+| zip_path | zip 压缩包文件路径（位置参数） |
+
+目标安装目录固定为 ag-updater 可执行文件自身所在的目录，无需额外指定。
 
 ### 5.3 执行流程
 
 ```
-1. 解析命令行参数
-2. 验证 zip 文件存在且可读
-3. 打开 zip 文件，定位根目录 "<app_name><version>/"
-4. 遍历 zip 内文件：
+1. 解析命令行参数，获取 zip 文件路径
+2. 获取 ag-updater 自身所在目录作为 target_dir
+3. 验证 zip 文件存在且可读
+4. 打开 zip 文件，定位第一个目录（zip 根目录下的首个子目录）
+5. 将该目录下的所有文件解压到 target_dir：
    a. 跳过更新程序自身（ag-updater.exe）
-   b. 将文件解压到 target_dir，覆盖已有文件
+   b. 覆盖已有文件
    c. 保持目录结构
-5. 删除临时 zip 文件
-6. 退出，返回 0 表示成功，非 0 表示失败
+6. 删除临时 zip 文件
+7. 退出，返回 0 表示成功，非 0 表示失败
 ```
 
 ### 5.4 注意事项
