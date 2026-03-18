@@ -1,0 +1,98 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: self-hosted
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+    # Detect whether MSYS2 + all required packages are already present
+    # on this self-hosted runner from a previous run.
+    - name: Check existing MSYS2
+      id: msys2-check
+      shell: cmd
+      run: |
+        set OK=true
+        if not exist "C:\msys64\usr\bin\bash.exe" set OK=false
+        if not exist "C:\msys64\mingw64\bin\gcc.exe" set OK=false
+        if not exist "C:\msys64\mingw64\bin\cmake.exe" set OK=false
+        if not exist "C:\msys64\mingw64\bin\ninja.exe" set OK=false
+        if not exist "C:\msys64\mingw64\bin\pkg-config.exe" set OK=false
+        echo found=%OK%>> "%GITHUB_OUTPUT%"
+
+    # Fast path: MSYS2 already installed — skip download, just set up shell
+    - uses: msys2/setup-msys2@v2
+      if: steps.msys2-check.outputs.found == 'true'
+      with:
+        msystem: MINGW64
+        release: false
+        update: false
+
+    # Cold path: first run — full install
+    - uses: msys2/setup-msys2@v2
+      if: steps.msys2-check.outputs.found != 'true'
+      with:
+        msystem: MINGW64
+        update: false
+        install: git
+        pacboy: >-
+          gcc:p
+          cmake:p
+          ninja:p
+          pkgconf:p
+          openssl:p
+          zlib:p
+
+    # Ensure all required packages (fast path skips package install;
+    # --needed makes this a no-op when already installed).
+    - name: Ensure packages
+      run: >-
+        pacman -S --needed --noconfirm
+        git
+        mingw-w64-x86_64-gcc
+        mingw-w64-x86_64-cmake
+        mingw-w64-x86_64-ninja
+        mingw-w64-x86_64-pkgconf
+        mingw-w64-x86_64-openssl
+        mingw-w64-x86_64-zlib
+
+    # Make MSYS2 git visible to Windows tools (actions/checkout needs it)
+    - name: Add MSYS2 to PATH
+      shell: cmd
+      run: echo C:\msys64\usr\bin>> "%GITHUB_PATH%"
+
+    # Clean stale .git state from previous runs
+    - name: Clean stale git state
+      shell: cmd
+      run: if exist "%GITHUB_WORKSPACE%\.git" rd /s /q "%GITHUB_WORKSPACE%\.git"
+
+    - uses: actions/checkout@v4
+
+    - name: Configure
+      run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      run: cmake --build build
+
+    - name: Collect artifacts
+      run: |
+        mkdir -p build/artifacts
+        find build -name 'ag-server.exe' -exec cp {} build/artifacts/ \;
+        find build -name 'ag-updater.exe' -exec cp {} build/artifacts/ \;
+        find build -name 'ag-manager.exe' -exec cp {} build/artifacts/ \;
+        find build -name 'libag-update-lib.a' -exec cp {} build/artifacts/ \;
+        cp -r server/web build/artifacts/web
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AGUpdater
+        path: build/artifacts/*
