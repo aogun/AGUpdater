@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AGUpdater Admin</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #333; }
+        .container { max-width: 960px; margin: 0 auto; padding: 20px; }
+        .header { background: #1a73e8; color: #fff; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 18px; font-weight: 500; }
+        .header button { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4); color: #fff; padding: 6px 14px; border-radius: 4px; cursor: pointer; }
+        .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 20px; }
+        .card h2 { font-size: 16px; margin-bottom: 16px; color: #1a73e8; }
+        .form-group { margin-bottom: 14px; }
+        .form-group label { display: block; margin-bottom: 4px; font-size: 13px; color: #666; }
+        .form-group input, .form-group textarea { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        .form-group textarea { resize: vertical; min-height: 60px; }
+        .btn { padding: 8px 18px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .btn-primary { background: #1a73e8; color: #fff; }
+        .btn-danger { background: #dc3545; color: #fff; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #fafafa; font-weight: 500; color: #666; font-size: 12px; text-transform: uppercase; }
+        .pagination { display: flex; justify-content: center; gap: 8px; margin-top: 16px; }
+        .pagination button { padding: 6px 12px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer; }
+        .pagination button.active { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+        .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .msg { padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; font-size: 13px; }
+        .msg-error { background: #fdecea; color: #b71c1c; }
+        .msg-success { background: #e8f5e9; color: #2e7d32; }
+        .login-wrap { display: flex; justify-content: center; align-items: center; min-height: 80vh; }
+        .login-card { width: 360px; }
+        .toolbar { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; }
+        .toolbar-right { margin-left: auto; }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); display: flex; justify-content: center; align-items: center; z-index: 100; }
+        .modal { background: #fff; border-radius: 8px; padding: 24px; width: 480px; max-width: 90vw; }
+        .modal h3 { margin-bottom: 16px; }
+        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+        .file-size { color: #888; }
+        .checkbox-col { width: 40px; text-align: center; }
+        .progress-bar { width: 100%; height: 6px; background: #eee; border-radius: 3px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; background: #1a73e8; transition: width 0.3s; }
+        a { color: #1a73e8; text-decoration: none; cursor: pointer; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <div class="header" v-if="token">
+            <h1>AGUpdater Admin</h1>
+            <button @click="logout">Logout</button>
+        </div>
+
+        <!-- Login Page -->
+        <div v-if="route === 'login'" class="login-wrap">
+            <div class="card login-card">
+                <h2>Admin Login</h2>
+                <div v-if="errorMsg" class="msg msg-error">{{ errorMsg }}</div>
+                <div class="form-group">
+                    <label>Username</label>
+                    <input v-model="loginForm.username" @keyup.enter="doLogin">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" v-model="loginForm.password" @keyup.enter="doLogin">
+                </div>
+                <button class="btn btn-primary" style="width:100%;margin-top:8px" @click="doLogin" :disabled="logging">
+                    {{ logging ? 'Logging in...' : 'Login' }}
+                </button>
+            </div>
+        </div>
+
+        <!-- Versions Page -->
+        <div v-if="route === 'versions'" class="container">
+            <div v-if="successMsg" class="msg msg-success">{{ successMsg }}</div>
+            <div v-if="errorMsg" class="msg msg-error">{{ errorMsg }}</div>
+
+            <div class="card">
+                <div class="toolbar">
+                    <h2 style="margin-bottom:0">Versions</h2>
+                    <div class="toolbar-right">
+                        <button class="btn btn-danger btn-sm" v-if="selectedVersions.length > 0" @click="batchDelete">
+                            Delete ({{ selectedVersions.length }})
+                        </button>
+                        <button class="btn btn-primary btn-sm" @click="showUpload = true" style="margin-left:6px">Upload</button>
+                        <button class="btn btn-sm" @click="loadVersions" style="margin-left:6px">Refresh</button>
+                    </div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="checkbox-col"><input type="checkbox" @change="toggleAll" :checked="allSelected"></th>
+                            <th>Version</th>
+                            <th>Description</th>
+                            <th>Size</th>
+                            <th>Downloads</th>
+                            <th>Date</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="v in versions" :key="v.id">
+                            <td class="checkbox-col"><input type="checkbox" :value="v.version" v-model="selectedVersions"></td>
+                            <td>{{ v.version }}</td>
+                            <td>{{ v.description }}</td>
+                            <td class="file-size">{{ formatSize(v.file_size) }}</td>
+                            <td><a @click="viewStats(v.version)">{{ v.download_count }}</a></td>
+                            <td>{{ formatDate(v.created_at) }}</td>
+                            <td>
+                                <button class="btn btn-sm" @click="startEdit(v)">Edit</button>
+                                <button class="btn btn-danger btn-sm" @click="deleteSingle(v.version)" style="margin-left:4px">Del</button>
+                            </td>
+                        </tr>
+                        <tr v-if="versions.length === 0">
+                            <td colspan="7" style="text-align:center;color:#999;padding:30px">No versions</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="pagination" v-if="totalPages > 1">
+                    <button :disabled="page <= 1" @click="page--; loadVersions()">Prev</button>
+                    <button v-for="p in paginationRange" :key="p" :class="{active: p === page}" @click="page = p; loadVersions()">{{ p }}</button>
+                    <button :disabled="page >= totalPages" @click="page++; loadVersions()">Next</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats Page -->
+        <div v-if="route === 'stats'" class="container">
+            <div class="card">
+                <div class="toolbar">
+                    <h2 style="margin-bottom:0">Download Stats - {{ statsVersion }}</h2>
+                    <div class="toolbar-right">
+                        <button class="btn btn-sm" @click="navigateTo('versions')">Back</button>
+                    </div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Device ID</th>
+                            <th>IP Address</th>
+                            <th>Downloaded At</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="log in downloadLogs" :key="log.downloaded_at">
+                            <td>{{ log.device_id }}</td>
+                            <td>{{ log.ip_address }}</td>
+                            <td>{{ formatDate(log.downloaded_at) }}</td>
+                        </tr>
+                        <tr v-if="downloadLogs.length === 0">
+                            <td colspan="3" style="text-align:center;color:#999;padding:30px">No download records</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="pagination" v-if="statsTotalPages > 1">
+                    <button :disabled="statsPage <= 1" @click="statsPage--; loadStats()">Prev</button>
+                    <button v-for="p in statsPaginationRange" :key="p" :class="{active: p === statsPage}" @click="statsPage = p; loadStats()">{{ p }}</button>
+                    <button :disabled="statsPage >= statsTotalPages" @click="statsPage++; loadStats()">Next</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload Modal -->
+        <div class="modal-overlay" v-if="showUpload" @click.self="showUpload = false">
+            <div class="modal">
+                <h3>Upload New Version</h3>
+                <div v-if="uploadError" class="msg msg-error">{{ uploadError }}</div>
+                <div class="form-group">
+                    <label>Version (e.g. 1.0.0)</label>
+                    <input v-model="uploadForm.version" placeholder="1.0.0">
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea v-model="uploadForm.description" placeholder="Version description"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>ZIP File</label>
+                    <input type="file" accept=".zip" @change="onFileSelect">
+                </div>
+                <div v-if="uploading" style="margin-top:10px">
+                    <div class="progress-bar"><div class="progress-bar-fill" :style="{width: uploadProgress + '%'}"></div></div>
+                    <div style="font-size:12px;color:#666;margin-top:4px;text-align:center">{{ uploadProgress }}%</div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn" @click="showUpload = false">Cancel</button>
+                    <button class="btn btn-primary" @click="doUpload" :disabled="uploading">
+                        {{ uploading ? 'Uploading...' : 'Upload' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Edit Modal -->
+        <div class="modal-overlay" v-if="showEdit" @click.self="showEdit = false">
+            <div class="modal">
+                <h3>Edit Version {{ editForm.version }}</h3>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea v-model="editForm.description"></textarea>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn" @click="showEdit = false">Cancel</button>
+                    <button class="btn btn-primary" @click="doEdit">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const { createApp, ref, computed, onMounted, watch } = Vue;
+
+    /* --- Crypto helpers (Web Crypto API) --- */
+    async function sha256Hex(message) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(message);
+        const hash = await crypto.subtle.digest('SHA-256', data);
+        return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function hmacSha256Hex(key, message) {
+        const encoder = new TextEncoder();
+        const keyData = encoder.encode(key);
+        const cryptoKey = await crypto.subtle.importKey(
+            'raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+        );
+        const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(message));
+        return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    /* --- API helper --- */
+    function apiUrl(path) {
+        return '/api/v1' + path;
+    }
+
+    async function apiFetch(path, options = {}) {
+        const token = localStorage.getItem('ag_token');
+        const headers = options.headers || {};
+        if (token) {
+            headers['Authorization'] = 'Bearer ' + token;
+        }
+        options.headers = headers;
+
+        const resp = await fetch(apiUrl(path), options);
+        if (resp.status === 401) {
+            localStorage.removeItem('ag_token');
+            location.hash = '#/login';
+            throw new Error('Session expired');
+        }
+        return resp;
+    }
+
+    async function apiJson(path, options = {}) {
+        const resp = await apiFetch(path, options);
+        return resp.json();
+    }
+
+    createApp({
+        setup() {
+            const route = ref('login');
+            const token = ref(localStorage.getItem('ag_token') || '');
+            const errorMsg = ref('');
+            const successMsg = ref('');
+            const logging = ref(false);
+
+            /* Login */
+            const loginForm = ref({ username: 'admin', password: '' });
+
+            /* Versions */
+            const versions = ref([]);
+            const page = ref(1);
+            const pageSize = 20;
+            const totalCount = ref(0);
+            const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / pageSize)));
+            const selectedVersions = ref([]);
+            const allSelected = computed(() =>
+                versions.value.length > 0 && selectedVersions.value.length === versions.value.length
+            );
+
+            /* Upload */
+            const showUpload = ref(false);
+            const uploadForm = ref({ version: '', description: '' });
+            const uploadFile = ref(null);
+            const uploading = ref(false);
+            const uploadProgress = ref(0);
+            const uploadError = ref('');
+
+            /* Edit */
+            const showEdit = ref(false);
+            const editForm = ref({ version: '', description: '' });
+
+            /* Stats */
+            const statsVersion = ref('');
+            const downloadLogs = ref([]);
+            const statsPage = ref(1);
+            const statsTotalCount = ref(0);
+            const statsTotalPages = computed(() => Math.max(1, Math.ceil(statsTotalCount.value / pageSize)));
+
+            /* Pagination range helper */
+            function calcRange(current, total) {
+                const range = [];
+                const start = Math.max(1, current - 2);
+                const end = Math.min(total, current + 2);
+                for (let i = start; i <= end; i++) range.push(i);
+                return range;
+            }
+            const paginationRange = computed(() => calcRange(page.value, totalPages.value));
+            const statsPaginationRange = computed(() => calcRange(statsPage.value, statsTotalPages.value));
+
+            /* Router */
+            function parseHash() {
+                const hash = location.hash || '#/login';
+                if (hash.startsWith('#/versions/') && hash.endsWith('/stats')) {
+                    const ver = hash.slice('#/versions/'.length, -'/stats'.length);
+                    statsVersion.value = decodeURIComponent(ver);
+                    return 'stats';
+                }
+                if (hash === '#/versions') return 'versions';
+                return 'login';
+            }
+
+            function navigateTo(r, param) {
+                if (r === 'login') { location.hash = '#/login'; }
+                else if (r === 'versions') { location.hash = '#/versions'; }
+                else if (r === 'stats') { location.hash = '#/versions/' + encodeURIComponent(param) + '/stats'; }
+            }
+
+            function onHashChange() {
+                errorMsg.value = '';
+                successMsg.value = '';
+                const r = parseHash();
+                if (r !== 'login' && !token.value) {
+                    location.hash = '#/login';
+                    route.value = 'login';
+                    return;
+                }
+                route.value = r;
+                if (r === 'versions') { loadVersions(); }
+                else if (r === 'stats') { loadStats(); }
+            }
+
+            /* Login flow */
+            async function doLogin() {
+                errorMsg.value = '';
+                logging.value = true;
+                try {
+                    /* 1. Get challenge nonce */
+                    const challengeResp = await apiJson('/admin/challenge');
+                    if (challengeResp.code !== 0) {
+                        errorMsg.value = challengeResp.message;
+                        return;
+                    }
+                    const nonce = challengeResp.data.nonce;
+
+                    /* 2. Compute password_hash = SHA256(password) */
+                    const passwordHash = await sha256Hex(loginForm.value.password);
+
+                    /* 3. Compute sign = HMAC-SHA256(key=password_hash, msg=nonce) */
+                    const sign = await hmacSha256Hex(passwordHash, nonce);
+
+                    /* 4. Post login */
+                    const loginResp = await apiJson('/admin/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            username: loginForm.value.username,
+                            nonce: nonce,
+                            sign: sign
+                        })
+                    });
+
+                    if (loginResp.code !== 0) {
+                        errorMsg.value = loginResp.message;
+                        return;
+                    }
+
+                    token.value = loginResp.data.token;
+                    localStorage.setItem('ag_token', token.value);
+                    loginForm.value.password = '';
+                    navigateTo('versions');
+                } catch (e) {
+                    errorMsg.value = 'Login failed: ' + e.message;
+                } finally {
+                    logging.value = false;
+                }
+            }
+
+            function logout() {
+                token.value = '';
+                localStorage.removeItem('ag_token');
+                navigateTo('login');
+            }
+
+            /* Versions CRUD */
+            async function loadVersions() {
+                try {
+                    const data = await apiJson('/admin/versions?page=' + page.value + '&page_size=' + pageSize);
+                    if (data.code === 0) {
+                        versions.value = data.data.items;
+                        totalCount.value = data.data.total;
+                        selectedVersions.value = [];
+                    } else {
+                        errorMsg.value = data.message;
+                    }
+                } catch (e) {
+                    errorMsg.value = e.message;
+                }
+            }
+
+            function toggleAll(e) {
+                if (e.target.checked) {
+                    selectedVersions.value = versions.value.map(v => v.version);
+                } else {
+                    selectedVersions.value = [];
+                }
+            }
+
+            async function deleteSingle(version) {
+                if (!confirm('Delete version ' + version + '?')) return;
+                try {
+                    const data = await apiJson('/admin/versions/' + encodeURIComponent(version), { method: 'DELETE' });
+                    if (data.code === 0) {
+                        successMsg.value = 'Deleted ' + version;
+                        loadVersions();
+                    } else {
+                        errorMsg.value = data.message;
+                    }
+                } catch (e) {
+                    errorMsg.value = e.message;
+                }
+            }
+
+            async function batchDelete() {
+                if (!confirm('Delete ' + selectedVersions.value.length + ' versions?')) return;
+                try {
+                    const data = await apiJson('/admin/versions', {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ versions: selectedVersions.value })
+                    });
+                    if (data.code === 0) {
+                        successMsg.value = 'Deleted ' + selectedVersions.value.length + ' versions';
+                        loadVersions();
+                    } else {
+                        errorMsg.value = data.message;
+                    }
+                } catch (e) {
+                    errorMsg.value = e.message;
+                }
+            }
+
+            /* Upload */
+            function onFileSelect(e) {
+                uploadFile.value = e.target.files[0] || null;
+            }
+
+            async function doUpload() {
+                uploadError.value = '';
+                if (!uploadForm.value.version || !uploadForm.value.description || !uploadFile.value) {
+                    uploadError.value = 'All fields are required';
+                    return;
+                }
+
+                uploading.value = true;
+                uploadProgress.value = 0;
+
+                const formData = new FormData();
+                formData.append('version', uploadForm.value.version);
+                formData.append('description', uploadForm.value.description);
+                formData.append('file', uploadFile.value);
+
+                try {
+                    const xhr = new XMLHttpRequest();
+                    const promise = new Promise((resolve, reject) => {
+                        xhr.upload.onprogress = (e) => {
+                            if (e.lengthComputable) {
+                                uploadProgress.value = Math.round((e.loaded / e.total) * 100);
+                            }
+                        };
+                        xhr.onload = () => {
+                            try { resolve(JSON.parse(xhr.responseText)); }
+                            catch (err) { reject(new Error('Invalid response')); }
+                        };
+                        xhr.onerror = () => reject(new Error('Network error'));
+                    });
+
+                    xhr.open('POST', apiUrl('/admin/versions'));
+                    xhr.setRequestHeader('Authorization', 'Bearer ' + token.value);
+                    xhr.send(formData);
+
+                    const data = await promise;
+                    if (data.code === 0) {
+                        showUpload.value = false;
+                        uploadForm.value = { version: '', description: '' };
+                        uploadFile.value = null;
+                        successMsg.value = 'Version ' + data.data.version + ' uploaded';
+                        loadVersions();
+                    } else {
+                        uploadError.value = data.message;
+                    }
+                } catch (e) {
+                    uploadError.value = e.message;
+                } finally {
+                    uploading.value = false;
+                }
+            }
+
+            /* Edit */
+            function startEdit(v) {
+                editForm.value = { version: v.version, description: v.description };
+                showEdit.value = true;
+            }
+
+            async function doEdit() {
+                try {
+                    const data = await apiJson('/admin/versions/' + encodeURIComponent(editForm.value.version), {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ description: editForm.value.description })
+                    });
+                    if (data.code === 0) {
+                        showEdit.value = false;
+                        successMsg.value = 'Version ' + editForm.value.version + ' updated';
+                        loadVersions();
+                    } else {
+                        errorMsg.value = data.message;
+                    }
+                } catch (e) {
+                    errorMsg.value = e.message;
+                }
+            }
+
+            /* Stats */
+            function viewStats(version) {
+                navigateTo('stats', version);
+            }
+
+            async function loadStats() {
+                try {
+                    const data = await apiJson('/admin/versions/' + encodeURIComponent(statsVersion.value) +
+                        '/downloads?page=' + statsPage.value + '&page_size=' + pageSize);
+                    if (data.code === 0) {
+                        downloadLogs.value = data.data.items;
+                        statsTotalCount.value = data.data.total;
+                    } else {
+                        errorMsg.value = data.message;
+                    }
+                } catch (e) {
+                    errorMsg.value = e.message;
+                }
+            }
+
+            /* Formatters */
+            function formatSize(bytes) {
+                if (bytes < 1024) return bytes + ' B';
+                if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+                return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+            }
+
+            function formatDate(isoStr) {
+                if (!isoStr) return '';
+                return isoStr.replace('T', ' ').replace('Z', '');
+            }
+
+            /* Init */
+            onMounted(() => {
+                window.addEventListener('hashchange', onHashChange);
+                if (token.value) {
+                    if (!location.hash || location.hash === '#/login') {
+                        location.hash = '#/versions';
+                    }
+                }
+                onHashChange();
+            });
+
+            return {
+                route, token, errorMsg, successMsg, logging,
+                loginForm, doLogin, logout,
+                versions, page, totalPages, totalCount, paginationRange,
+                selectedVersions, allSelected, toggleAll,
+                loadVersions, deleteSingle, batchDelete,
+                showUpload, uploadForm, uploadFile, uploading, uploadProgress, uploadError,
+                onFileSelect, doUpload,
+                showEdit, editForm, startEdit, doEdit,
+                statsVersion, downloadLogs, statsPage, statsTotalPages, statsPaginationRange,
+                viewStats, loadStats,
+                formatSize, formatDate, navigateTo
+            };
+        }
+    }).mount('#app');
+    </script>
+</body>
+</html>
