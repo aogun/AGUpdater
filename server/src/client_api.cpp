@@ -33,12 +33,24 @@ static std::string sanitize_filename(const std::string &name)
     return result;
 }
 
-/* X-Auth middleware check - returns true if authorized, sets device_id */
+/* X-Auth middleware check - returns true if authorized, sets device_id.
+ * Also accepts a valid admin Bearer token to skip HMAC verification,
+ * allowing logged-in admin users to call client APIs directly. */
 static bool check_client_auth(const httplib::Request &req,
                                httplib::Response &res,
                                AppContext &ctx,
                                std::string &device_id)
 {
+    /* Check if request carries a valid admin token */
+    std::string token = extract_bearer_token(req);
+    if (!token.empty() && ctx.admin_auth.verify_token(token)) {
+        device_id = "admin";
+        LOG_DEBUG("Client auth: admin token accepted for %s %s",
+                  req.method.c_str(), req.path.c_str());
+        return true;
+    }
+
+    /* Fall back to X-Auth HMAC verification */
     std::string xauth;
     if (req.has_header("X-Auth")) {
         xauth = req.get_header_value("X-Auth");
@@ -77,7 +89,10 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             std::string device_id;
             if (!check_client_auth(req, res, ctx, device_id)) return;
 
-            LOG_DEBUG("GET /api/v1/client/updates (device=%s)", device_id.c_str());
+            LOG_DEBUG("GET /api/v1/client/updates from %s (device=%s, query=%s)",
+                     req.remote_addr.c_str(), device_id.c_str(),
+                     req.has_param("current_version") ?
+                         req.get_param_value("current_version").c_str() : "");
 
             if (!req.has_param("current_version")) {
                 LOG_WARN("Update check: missing current_version param (device=%s)",
@@ -147,10 +162,11 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             cJSON_Delete(data);
 
             std::string msg = newer.empty() ? "no update available" : "success";
+            std::string resp_body = json_response(0, msg, data_json);
             LOG_INFO("Update check: device=%s, current=%s, updates_available=%zu",
                      device_id.c_str(), current_version.c_str(), newer.size());
-            res.set_content(json_response(0, msg, data_json),
-                           "application/json");
+            LOG_DEBUG("GET /api/v1/client/updates response: %s", resp_body.c_str());
+            res.set_content(resp_body, "application/json");
         });
 
     /* GET /api/v1/client/versions?page=1&page_size=20 */
@@ -159,7 +175,10 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             std::string device_id;
             if (!check_client_auth(req, res, ctx, device_id)) return;
 
-            LOG_DEBUG("GET /api/v1/client/versions (device=%s)", device_id.c_str());
+            LOG_DEBUG("GET /api/v1/client/versions from %s (device=%s, page=%d, page_size=%d)",
+                     req.remote_addr.c_str(), device_id.c_str(),
+                     get_query_int(req, "page", 1),
+                     get_query_int(req, "page_size", 20));
 
             int page = get_query_int(req, "page", 1);
             int page_size = get_query_int(req, "page_size", 20);
@@ -205,8 +224,9 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             free(data_str);
             cJSON_Delete(data);
 
-            res.set_content(json_response(0, "success", data_json),
-                           "application/json");
+            std::string resp_body = json_response(0, "success", data_json);
+            LOG_DEBUG("GET /api/v1/client/versions response: %s", resp_body.c_str());
+            res.set_content(resp_body, "application/json");
         });
 
     /* GET /api/v1/client/download/:version */
@@ -216,8 +236,8 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             if (!check_client_auth(req, res, ctx, device_id)) return;
 
             std::string version = req.matches[1].str();
-            LOG_DEBUG("GET /api/v1/client/download/%s (device=%s)",
-                      version.c_str(), device_id.c_str());
+            LOG_DEBUG("GET /api/v1/client/download/%s from %s (device=%s)",
+                      version.c_str(), req.remote_addr.c_str(), device_id.c_str());
 
             /* Look up version in database */
             VersionRecord rec;
