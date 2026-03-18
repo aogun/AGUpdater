@@ -227,6 +227,14 @@ CREATE INDEX IF NOT EXISTS idx_download_logs_version ON download_logs(version_id
 }
 ```
 
+**Token 管理规则：**
+
+- Token 格式：服务器生成的随机字符串（32 字符 hex）
+- 有效期：24 小时，过期后需重新登录
+- 携带方式：后续管理接口请求须在请求头中携带 `Authorization: Bearer <token>`
+- 服务器维护 token → 过期时间的映射（内存中），校验时检查 token 是否存在且未过期
+- 无显式登出接口，token 过期自动失效
+
 ---
 
 **POST /api/v1/admin/versions** — 上传新版本
@@ -298,11 +306,15 @@ CREATE INDEX IF NOT EXISTS idx_download_logs_version ON download_logs(version_id
 }
 ```
 
+响应：通用成功响应（`data` 为 `null`）。
+
 ---
 
 **DELETE /api/v1/admin/versions/{version}** — 删除指定版本
 
 服务器同时删除数据库记录和存储的 zip 文件。
+
+响应：通用成功响应（`data` 为 `null`）。
 
 ---
 
@@ -314,6 +326,8 @@ CREATE INDEX IF NOT EXISTS idx_download_logs_version ON download_logs(version_id
   "versions": ["1.0.0", "1.0.1"]
 }
 ```
+
+响应：通用成功响应（`data` 为 `null`）。
 
 ---
 
@@ -341,7 +355,7 @@ CREATE INDEX IF NOT EXISTS idx_download_logs_version ON download_logs(version_id
 
 #### 3.3.3 客户端接口（HMAC 校验）
 
-所有客户端接口请求须携带 `X-Auth` 请求头，内容为身份校验 JSON 字符串（参见第 6 节）。
+所有客户端接口请求须携带 `X-Auth` 请求头，内容为身份校验 JSON 字符串（参见第 7 节）。
 
 **GET /api/v1/client/updates?current_version=1.0.0** — 检查更新
 
@@ -408,7 +422,7 @@ CREATE INDEX IF NOT EXISTS idx_download_logs_version ON download_logs(version_id
 
 | 页面 | 路径 | 功能 |
 |------|------|------|
-| 登录页 | /login | 用户名密码登录 |
+| 登录页 | /login | 用户名密码登录（前端实现 challenge-response 签名流程） |
 | 版本管理 | /versions | 版本列表、上传、删除、编辑 |
 | 下载统计 | /versions/:id/stats | 查看某版本的下载记录 |
 
@@ -475,7 +489,9 @@ typedef struct ag_download_progress {
 /**
  * 检查更新回调函数
  * @param error      错误码，AG_OK 表示成功
- * @param info       版本信息，无更新时为 NULL，调用者不得释放此指针
+ * @param info       版本信息数组，无更新时为 NULL，调用者不得释放此指针
+ *                   数组包含 update_count 个元素，按版本号升序排列
+ *                   可通过 info[0] ~ info[update_count-1] 访问
  * @param update_count 可用更新数量
  * @param user_data  用户自定义数据
  */
@@ -624,7 +640,7 @@ ag-updater --zip <zip_path> --target <target_dir> [--app-name <name>] [--version
 
 ### 6.1 功能
 
-GUI 工具，提供界面供用户浏览服务器版本并选择下载安装。
+GUI 工具，使用 Win32 API 构建原生 Windows 界面，提供界面供用户浏览服务器版本并选择下载安装。
 
 ### 6.2 界面设计
 
@@ -730,6 +746,8 @@ GUI 工具，提供界面供用户浏览服务器版本并选择下载安装。
 
 服务器在查询"指定版本之后的更新"时，按此规则排序并筛选所有比 `current_version` 更大的版本。
 
+> 由于 SQLite TEXT 排序无法正确比较语义化版本号（如 `"9.0.0" > "10.0.0"`），版本比较在应用层完成：从数据库读取所有版本后，在 C++ 代码中解析并比较 MAJOR.MINOR.PATCH 数值，再过滤和排序。
+
 ### 8.3 版本号正则校验
 
 ```
@@ -781,6 +799,7 @@ AGUpdater/
 │           └── main.cpp
 └── third_party/                # 第三方依赖
     ├── sqlite3/
+    ├── cpp-httplib/            # HTTP(S) 服务器/客户端
     ├── minizip/                # zip 解压
     └── ...
 ```
