@@ -98,8 +98,18 @@ AGUpdater 是一个自动更新系统，由以下组件构成：
 | file_name | TEXT | NOT NULL | 存储的文件名 |
 | file_size | INTEGER | NOT NULL | 文件大小 (bytes) |
 | file_sha256 | TEXT | NOT NULL | 文件 SHA256 校验值 |
-| download_count | INTEGER | DEFAULT 0 | 下载次数 |
 | created_at | TEXT | NOT NULL | 上传时间 (ISO 8601) |
+| summary | TEXT | DEFAULT '{}' | JSON 扩展字段，存放不需要索引查询的数据 |
+
+**summary 字段 JSON 结构：**
+
+```json
+{
+  "download_count": 0
+}
+```
+
+> `summary` 字段用于存放无需作为查询条件的扩展数据。后续新增的非查询字段统一放入此 JSON 中，避免频繁变更表结构。
 
 **download_logs 表** — 下载日志
 
@@ -121,8 +131,8 @@ CREATE TABLE IF NOT EXISTS versions (
     file_name     TEXT    NOT NULL,
     file_size     INTEGER NOT NULL,
     file_sha256   TEXT    NOT NULL,
-    download_count INTEGER DEFAULT 0,
-    created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    summary       TEXT    DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS download_logs (
