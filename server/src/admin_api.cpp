@@ -1,6 +1,7 @@
 #include "admin_api.h"
 #include "version_util.h"
 #include "cJSON.h"
+#include "log.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -95,6 +96,8 @@ static bool check_admin_token(const httplib::Request &req,
 {
     std::string token = extract_bearer_token(req);
     if (token.empty() || !ctx.admin_auth.verify_token(token)) {
+        LOG_WARN("Admin API unauthorized access attempt: %s %s",
+                 req.method.c_str(), req.path.c_str());
         res.set_content(json_error(2001, "unauthorized"), "application/json");
         res.status = 401;
         return false;
@@ -107,6 +110,7 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
     /* GET /api/v1/admin/challenge */
     svr.Get("/api/v1/admin/challenge",
         [&ctx](const httplib::Request &, httplib::Response &res) {
+            LOG_DEBUG("GET /api/v1/admin/challenge");
             std::string nonce = ctx.admin_auth.generate_nonce();
 
             cJSON *data = cJSON_CreateObject();
@@ -123,8 +127,11 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
     /* POST /api/v1/admin/login */
     svr.Post("/api/v1/admin/login",
         [&ctx](const httplib::Request &req, httplib::Response &res) {
+            LOG_DEBUG("POST /api/v1/admin/login");
+
             cJSON *body = cJSON_Parse(req.body.c_str());
             if (!body) {
+                LOG_WARN("Login request: invalid JSON body");
                 res.set_content(json_error(1001, "invalid JSON"),
                                "application/json");
                 res.status = 400;
@@ -138,6 +145,7 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
             if (!cJSON_IsString(j_user) || !cJSON_IsString(j_nonce) ||
                 !cJSON_IsString(j_sign)) {
                 cJSON_Delete(body);
+                LOG_WARN("Login request: missing required fields");
                 res.set_content(json_error(1001, "missing required fields"),
                                "application/json");
                 res.status = 400;
@@ -153,11 +161,14 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
                 username, nonce, sign, ctx.config.admin.username);
 
             if (token.empty()) {
+                LOG_WARN("Login failed for user '%s'", username.c_str());
                 res.set_content(json_error(2001, "login failed"),
                                "application/json");
                 res.status = 401;
                 return;
             }
+
+            LOG_INFO("Login successful for user '%s'", username.c_str());
 
             cJSON *data = cJSON_CreateObject();
             cJSON_AddStringToObject(data, "token", token.c_str());
@@ -170,14 +181,17 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
                            "application/json");
         });
 
-    /* POST /api/v1/admin/versions — upload new version (multipart) */
+    /* POST /api/v1/admin/versions -- upload new version (multipart) */
     svr.Post("/api/v1/admin/versions",
         [&ctx](const httplib::Request &req, httplib::Response &res) {
             if (!check_admin_token(req, res, ctx)) return;
 
+            LOG_DEBUG("POST /api/v1/admin/versions (upload)");
+
             /* Extract multipart fields */
             if (!req.has_file("version") || !req.has_file("description") ||
                 !req.has_file("file")) {
+                LOG_WARN("Upload request: missing version, description, or file field");
                 res.set_content(
                     json_error(1001, "missing version, description, or file"),
                     "application/json");
@@ -190,8 +204,12 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
             const httplib::MultipartFormData &file_data =
                 req.get_file_value("file");
 
+            LOG_INFO("Upload request: version=%s, file_size=%zu",
+                     version.c_str(), file_data.content.size());
+
             /* Validate version format */
             if (!semver_validate(version)) {
+                LOG_WARN("Upload rejected: invalid version format '%s'", version.c_str());
                 res.set_content(json_error(1001, "invalid version format"),
                                "application/json");
                 res.status = 400;
@@ -202,6 +220,7 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
             VersionRecord existing;
             std::string err;
             if (ctx.db.get_version_by_name(version, existing, err)) {
+                LOG_WARN("Upload rejected: version '%s' already exists", version.c_str());
                 res.set_content(json_error(1002, "version already exists"),
                                "application/json");
                 res.status = 409;
@@ -210,6 +229,8 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
 
             /* Validate zip magic number */
             if (!is_zip_file(file_data.content)) {
+                LOG_WARN("Upload rejected: file is not a valid zip for version '%s'",
+                         version.c_str());
                 res.set_content(json_error(1004, "file is not a valid zip"),
                                "application/json");
                 res.status = 400;
@@ -220,6 +241,8 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
             int64_t max_bytes = static_cast<int64_t>(ctx.config.max_upload_size_mb)
                                 * 1024 * 1024;
             if (static_cast<int64_t>(file_data.content.size()) > max_bytes) {
+                LOG_WARN("Upload rejected: file size %zu exceeds limit %lld for version '%s'",
+                         file_data.content.size(), (long long)max_bytes, version.c_str());
                 res.set_content(json_error(1005, "file size exceeds limit"),
                                "application/json");
                 res.status = 413;
@@ -229,6 +252,8 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
             /* Compute SHA256 */
             std::string file_sha256 = sha256_data_hex(
                 file_data.content.c_str(), file_data.content.size());
+            LOG_DEBUG("Upload: computed SHA256=%s for version '%s'",
+                      file_sha256.c_str(), version.c_str());
 
             /* Save file to storage_dir/<version>.zip */
             ensure_directory(ctx.config.storage_dir);
@@ -237,11 +262,13 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
 
             if (!write_file(file_path, file_data.content.c_str(),
                            file_data.content.size())) {
+                LOG_ERROR("Upload failed: could not write file '%s'", file_path.c_str());
                 res.set_content(json_error(3001, "failed to save file"),
                                "application/json");
                 res.status = 500;
                 return;
             }
+            LOG_DEBUG("Upload: file saved to '%s'", file_path.c_str());
 
             /* Insert into database */
             int new_id = 0;
@@ -252,16 +279,23 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
                 remove_file(file_path);
                 /* Check if duplicate */
                 if (db_err.find("UNIQUE") != std::string::npos) {
+                    LOG_WARN("Upload failed: version '%s' already exists (DB constraint)",
+                             version.c_str());
                     res.set_content(json_error(1002, "version already exists"),
                                    "application/json");
                     res.status = 409;
                 } else {
+                    LOG_ERROR("Upload failed: DB insert error for version '%s': %s",
+                              version.c_str(), db_err.c_str());
                     res.set_content(json_error(3001, "internal server error"),
                                    "application/json");
                     res.status = 500;
                 }
                 return;
             }
+
+            LOG_INFO("Version '%s' uploaded successfully (id=%d, sha256=%s)",
+                     version.c_str(), new_id, file_sha256.c_str());
 
             /* Build response */
             cJSON *data = cJSON_CreateObject();
@@ -278,10 +312,12 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
             res.status = 201;
         });
 
-    /* GET /api/v1/admin/versions — list versions (paged) */
+    /* GET /api/v1/admin/versions -- list versions (paged) */
     svr.Get("/api/v1/admin/versions",
         [&ctx](const httplib::Request &req, httplib::Response &res) {
             if (!check_admin_token(req, res, ctx)) return;
+
+            LOG_DEBUG("GET /api/v1/admin/versions");
 
             int page = get_query_int(req, "page", 1);
             int page_size = get_query_int(req, "page_size", 20);
@@ -289,6 +325,7 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
             VersionPage vpage;
             std::string err;
             if (!ctx.db.get_versions_paged(page, page_size, vpage, err)) {
+                LOG_ERROR("Failed to get versions page: %s", err.c_str());
                 res.set_content(json_error(3001, "internal server error"),
                                "application/json");
                 res.status = 500;
@@ -300,15 +337,17 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
                            "application/json");
         });
 
-    /* PUT /api/v1/admin/versions/:version — update version description */
+    /* PUT /api/v1/admin/versions/:version -- update version description */
     svr.Put(R"(/api/v1/admin/versions/([^/]+))",
         [&ctx](const httplib::Request &req, httplib::Response &res) {
             if (!check_admin_token(req, res, ctx)) return;
 
             std::string version = req.matches[1].str();
+            LOG_DEBUG("PUT /api/v1/admin/versions/%s", version.c_str());
 
             /* Validate version format */
             if (!semver_validate(version)) {
+                LOG_WARN("Update rejected: invalid version format '%s'", version.c_str());
                 res.set_content(json_error(1001, "invalid version format"),
                                "application/json");
                 res.status = 400;
@@ -317,6 +356,7 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
 
             cJSON *body = cJSON_Parse(req.body.c_str());
             if (!body) {
+                LOG_WARN("Update request: invalid JSON body for version '%s'", version.c_str());
                 res.set_content(json_error(1001, "invalid JSON"),
                                "application/json");
                 res.status = 400;
@@ -327,6 +367,7 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
                                                                      "description");
             if (!cJSON_IsString(j_desc)) {
                 cJSON_Delete(body);
+                LOG_WARN("Update request: missing description for version '%s'", version.c_str());
                 res.set_content(json_error(1001, "missing description"),
                                "application/json");
                 res.status = 400;
@@ -339,10 +380,12 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
             std::string err;
             if (!ctx.db.update_version_description(version, description, err)) {
                 if (err.find("not found") != std::string::npos) {
+                    LOG_WARN("Update failed: version '%s' not found", version.c_str());
                     res.set_content(json_error(1003, "version not found"),
                                    "application/json");
                     res.status = 404;
                 } else {
+                    LOG_ERROR("Update failed for version '%s': %s", version.c_str(), err.c_str());
                     res.set_content(json_error(3001, "internal server error"),
                                    "application/json");
                     res.status = 500;
@@ -350,16 +393,20 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
                 return;
             }
 
+            LOG_INFO("Version '%s' description updated", version.c_str());
             res.set_content(json_response(0, "success"), "application/json");
         });
 
-    /* DELETE /api/v1/admin/versions — batch delete (JSON body) */
+    /* DELETE /api/v1/admin/versions -- batch delete (JSON body) */
     svr.Delete("/api/v1/admin/versions",
         [&ctx](const httplib::Request &req, httplib::Response &res) {
             if (!check_admin_token(req, res, ctx)) return;
 
+            LOG_DEBUG("DELETE /api/v1/admin/versions (batch)");
+
             cJSON *body = cJSON_Parse(req.body.c_str());
             if (!body) {
+                LOG_WARN("Batch delete request: invalid JSON body");
                 res.set_content(json_error(1001, "invalid JSON"),
                                "application/json");
                 res.status = 400;
@@ -370,6 +417,7 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
                                                                         "versions");
             if (!cJSON_IsArray(j_versions)) {
                 cJSON_Delete(body);
+                LOG_WARN("Batch delete request: missing versions array");
                 res.set_content(json_error(1001, "missing versions array"),
                                "application/json");
                 res.status = 400;
@@ -384,6 +432,7 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
                     std::string ver = item->valuestring;
                     if (!semver_validate(ver)) {
                         cJSON_Delete(body);
+                        LOG_WARN("Batch delete rejected: invalid version format '%s'", ver.c_str());
                         res.set_content(json_error(1001, "invalid version format in array"),
                                        "application/json");
                         res.status = 400;
@@ -394,9 +443,12 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
             }
             cJSON_Delete(body);
 
+            LOG_INFO("Batch delete request: %zu versions", versions.size());
+
             /* Delete from database first, then remove files */
             std::string err;
             if (!ctx.db.delete_versions_batch(versions, err)) {
+                LOG_ERROR("Batch delete failed: %s", err.c_str());
                 res.set_content(json_error(3001, "internal server error"),
                                "application/json");
                 res.status = 500;
@@ -407,21 +459,26 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
             for (size_t i = 0; i < versions.size(); ++i) {
                 std::string fpath = ctx.config.storage_dir + "/" +
                                     versions[i] + ".zip";
-                remove_file(fpath);
+                if (!remove_file(fpath)) {
+                    LOG_WARN("Failed to remove file '%s' during batch delete", fpath.c_str());
+                }
             }
 
+            LOG_INFO("Batch delete completed: %zu versions removed", versions.size());
             res.set_content(json_response(0, "success"), "application/json");
         });
 
-    /* DELETE /api/v1/admin/versions/:version — delete single version */
+    /* DELETE /api/v1/admin/versions/:version -- delete single version */
     svr.Delete(R"(/api/v1/admin/versions/([^/]+))",
         [&ctx](const httplib::Request &req, httplib::Response &res) {
             if (!check_admin_token(req, res, ctx)) return;
 
             std::string version = req.matches[1].str();
+            LOG_DEBUG("DELETE /api/v1/admin/versions/%s", version.c_str());
 
             /* Validate version format to prevent path traversal */
             if (!semver_validate(version)) {
+                LOG_WARN("Delete rejected: invalid version format '%s'", version.c_str());
                 res.set_content(json_error(1001, "invalid version format"),
                                "application/json");
                 res.status = 400;
@@ -432,10 +489,12 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
             std::string err;
             if (!ctx.db.delete_version(version, err)) {
                 if (err.find("not found") != std::string::npos) {
+                    LOG_WARN("Delete failed: version '%s' not found", version.c_str());
                     res.set_content(json_error(1003, "version not found"),
                                    "application/json");
                     res.status = 404;
                 } else {
+                    LOG_ERROR("Delete failed for version '%s': %s", version.c_str(), err.c_str());
                     res.set_content(json_error(3001, "internal server error"),
                                    "application/json");
                     res.status = 500;
@@ -445,22 +504,27 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
 
             /* Delete storage file after successful DB deletion */
             std::string fpath = ctx.config.storage_dir + "/" + version + ".zip";
-            remove_file(fpath);
+            if (!remove_file(fpath)) {
+                LOG_WARN("Failed to remove file '%s' after version delete", fpath.c_str());
+            }
 
+            LOG_INFO("Version '%s' deleted", version.c_str());
             res.set_content(json_response(0, "success"), "application/json");
         });
 
-    /* GET /api/v1/admin/versions/:version/downloads — download statistics */
+    /* GET /api/v1/admin/versions/:version/downloads -- download statistics */
     svr.Get(R"(/api/v1/admin/versions/([^/]+)/downloads)",
         [&ctx](const httplib::Request &req, httplib::Response &res) {
             if (!check_admin_token(req, res, ctx)) return;
 
             std::string version = req.matches[1].str();
+            LOG_DEBUG("GET /api/v1/admin/versions/%s/downloads", version.c_str());
 
             /* Look up version to get its id */
             VersionRecord rec;
             std::string err;
             if (!ctx.db.get_version_by_name(version, rec, err)) {
+                LOG_WARN("Download stats: version '%s' not found", version.c_str());
                 res.set_content(json_error(1003, "version not found"),
                                "application/json");
                 res.status = 404;
@@ -472,6 +536,8 @@ void register_admin_routes(httplib::Server &svr, AppContext &ctx)
 
             DownloadLogPage dlpage;
             if (!ctx.db.get_download_logs(rec.id, page, page_size, dlpage, err)) {
+                LOG_ERROR("Failed to get download logs for version '%s': %s",
+                          version.c_str(), err.c_str());
                 res.set_content(json_error(3001, "internal server error"),
                                "application/json");
                 res.status = 500;

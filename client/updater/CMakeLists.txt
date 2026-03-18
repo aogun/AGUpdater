@@ -7,6 +7,7 @@ target_include_directories(ag-updater PRIVATE
 )
 
 target_link_libraries(ag-updater PRIVATE
+    aglog
     minizip
     ZLIB::ZLIB
 )

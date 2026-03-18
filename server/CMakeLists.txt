@@ -18,6 +18,7 @@ target_include_directories(ag-server PRIVATE
 target_compile_definitions(ag-server PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
 
 target_link_libraries(ag-server PRIVATE
+    aglog
     sqlite3
     cjson
     OpenSSL::SSL

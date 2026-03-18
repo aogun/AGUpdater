@@ -38,6 +38,10 @@ add_library(minizip STATIC ${MINIZIP_SOURCES})
 target_include_directories(minizip PUBLIC ${THIRD_PARTY_DIR}/minizip)
 target_link_libraries(minizip PRIVATE ZLIB::ZLIB)
 
+# Shared log library
+add_library(aglog STATIC ${CMAKE_SOURCE_DIR}/src/log.cpp)
+target_include_directories(aglog PUBLIC ${CMAKE_SOURCE_DIR}/src)
+
 # Sub-projects
 add_subdirectory(server)
 add_subdirectory(client)

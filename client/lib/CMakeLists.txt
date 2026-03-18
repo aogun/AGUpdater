@@ -29,6 +29,7 @@ target_compile_definitions(ag-update-lib PRIVATE
 find_package(Threads REQUIRED)
 
 target_link_libraries(ag-update-lib PRIVATE
+    aglog
     cjson
     OpenSSL::SSL
     OpenSSL::Crypto

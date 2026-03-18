@@ -1,6 +1,7 @@
 #include "client_api.h"
 #include "version_util.h"
 #include "cJSON.h"
+#include "log.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -45,6 +46,7 @@ static bool check_client_auth(const httplib::Request &req,
 
     std::string err_msg;
     if (!ctx.client_auth.verify_xauth(xauth, device_id, err_msg)) {
+        LOG_WARN("Client auth failed: %s (path=%s)", err_msg.c_str(), req.path.c_str());
         res.set_content(json_error(2002, err_msg), "application/json");
         res.status = 403;
         return false;
@@ -75,7 +77,11 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             std::string device_id;
             if (!check_client_auth(req, res, ctx, device_id)) return;
 
+            LOG_DEBUG("GET /api/v1/client/updates (device=%s)", device_id.c_str());
+
             if (!req.has_param("current_version")) {
+                LOG_WARN("Update check: missing current_version param (device=%s)",
+                         device_id.c_str());
                 res.set_content(
                     json_error(1001, "missing current_version parameter"),
                     "application/json");
@@ -85,6 +91,8 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
 
             std::string current_version = req.get_param_value("current_version");
             if (!semver_validate(current_version)) {
+                LOG_WARN("Update check: invalid version format '%s' (device=%s)",
+                         current_version.c_str(), device_id.c_str());
                 res.set_content(
                     json_error(1001, "invalid version format"),
                     "application/json");
@@ -96,6 +104,7 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             std::vector<VersionRecord> all_versions;
             std::string err;
             if (!ctx.db.get_all_versions(all_versions, err)) {
+                LOG_ERROR("Update check: failed to get versions: %s", err.c_str());
                 res.set_content(json_error(3001, "internal server error"),
                                "application/json");
                 res.status = 500;
@@ -138,6 +147,8 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             cJSON_Delete(data);
 
             std::string msg = newer.empty() ? "no update available" : "success";
+            LOG_INFO("Update check: device=%s, current=%s, updates_available=%zu",
+                     device_id.c_str(), current_version.c_str(), newer.size());
             res.set_content(json_response(0, msg, data_json),
                            "application/json");
         });
@@ -148,12 +159,15 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             std::string device_id;
             if (!check_client_auth(req, res, ctx, device_id)) return;
 
+            LOG_DEBUG("GET /api/v1/client/versions (device=%s)", device_id.c_str());
+
             int page = get_query_int(req, "page", 1);
             int page_size = get_query_int(req, "page_size", 20);
 
             VersionPage vpage;
             std::string err;
             if (!ctx.db.get_versions_paged(page, page_size, vpage, err)) {
+                LOG_ERROR("Client versions list failed: %s", err.c_str());
                 res.set_content(json_error(3001, "internal server error"),
                                "application/json");
                 res.status = 500;
@@ -202,11 +216,15 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             if (!check_client_auth(req, res, ctx, device_id)) return;
 
             std::string version = req.matches[1].str();
+            LOG_DEBUG("GET /api/v1/client/download/%s (device=%s)",
+                      version.c_str(), device_id.c_str());
 
             /* Look up version in database */
             VersionRecord rec;
             std::string err;
             if (!ctx.db.get_version_by_name(version, rec, err)) {
+                LOG_WARN("Download request: version '%s' not found (device=%s)",
+                         version.c_str(), device_id.c_str());
                 res.set_content(json_error(1003, "version not found"),
                                "application/json");
                 res.status = 404;
@@ -215,6 +233,8 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
 
             /* Fix 4: Validate file_name has no path traversal */
             if (!is_safe_filename(rec.file_name)) {
+                LOG_ERROR("Download request: unsafe file_name '%s' in database for version '%s'",
+                          rec.file_name.c_str(), version.c_str());
                 res.set_content(json_error(3001, "invalid file name in database"),
                                "application/json");
                 res.status = 500;
@@ -230,6 +250,8 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             std::shared_ptr<FILE> file_handle(fopen(file_path.c_str(), "rb"),
                                                FileCloser());
             if (!file_handle) {
+                LOG_ERROR("Download request: file not found on disk '%s' for version '%s'",
+                          file_path.c_str(), version.c_str());
                 res.set_content(json_error(3001, "file not found on server"),
                                "application/json");
                 res.status = 500;
@@ -249,6 +271,10 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
             std::string disposition = "attachment; filename=\"" +
                                        safe_name + "\"";
             res.set_header("Content-Disposition", disposition.c_str());
+
+            LOG_INFO("Download starting: version='%s', file='%s', size=%zu, device=%s, ip=%s",
+                     version.c_str(), rec.file_name.c_str(), total_size,
+                     device_id.c_str(), req.remote_addr.c_str());
 
             /* Use content provider for streaming */
             int version_id = rec.id;
@@ -277,9 +303,14 @@ void register_client_routes(httplib::Server &svr, AppContext &ctx)
                 },
                 [&ctx, version_id, dev_id_copy, ip](bool success) {
                     if (success) {
+                        LOG_INFO("Download completed: version_id=%d, device=%s, ip=%s",
+                                 version_id, dev_id_copy.c_str(), ip.c_str());
                         std::string err;
                         ctx.db.increment_download_count(version_id, err);
                         ctx.db.log_download(version_id, dev_id_copy, ip, err);
+                    } else {
+                        LOG_WARN("Download interrupted: version_id=%d, device=%s, ip=%s",
+                                 version_id, dev_id_copy.c_str(), ip.c_str());
                     }
                 });
         });

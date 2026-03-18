@@ -5,6 +5,7 @@
  */
 #include "version.h"
 #include "ag_updater.h"
+#include "log.h"
 
 #ifdef _WIN32
 
@@ -74,6 +75,8 @@ static std::string format_size(int64_t bytes)
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
+    log_init_file("ag-manager.log");
+    LOG_INFO("ag-manager v%s starting", APP_VERSION_STRING);
     g_hinst = hInstance;
 
     /* Init common controls for ListView and ProgressBar */
@@ -103,6 +106,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
         CW_USEDEFAULT, CW_USEDEFAULT, WIN_W, WIN_H,
         NULL, NULL, hInstance, NULL);
 
+    LOG_INFO("Main window created");
     ShowWindow(g_hwnd, nCmdShow);
     UpdateWindow(g_hwnd);
 
@@ -205,6 +209,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     case WM_CHECK_ERROR: {
+        LOG_ERROR("Failed to check for updates");
         SetWindowTextA(g_detail, "Failed to check for updates.");
         break;
     }
@@ -227,6 +232,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     case WM_DOWNLOAD_ERROR: {
+        LOG_ERROR("Download failed");
         SendMessage(g_progress, PBM_SETPOS, 0, 0);
         EnableWindow(g_btn_download, TRUE);
         EnableWindow(g_btn_refresh, TRUE);
@@ -261,8 +267,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (result == IDYES) {
             ag_error_t err = ag_apply_update(fp.c_str());
             if (err == AG_OK) {
+                LOG_INFO("Updater launched, exiting manager");
                 PostQuitMessage(0);
             } else {
+                LOG_ERROR("Failed to start updater, error=%d", (int)err);
                 MessageBoxA(hwnd, "Failed to start updater.",
                            "Error", MB_OK | MB_ICONERROR);
             }
@@ -331,6 +339,7 @@ static void on_check_callback(ag_error_t error, const ag_version_info_t *info,
     (void)user_data;
 
     if (error != AG_OK && error != AG_ERR_NO_UPDATE) {
+        LOG_ERROR("on_check_callback: check update failed, error=%d", (int)error);
         PostMessage(g_hwnd, WM_CHECK_ERROR, (WPARAM)error, 0);
         return;
     }
@@ -345,12 +354,14 @@ static void on_check_callback(ag_error_t error, const ag_version_info_t *info,
         }
     }
 
+    LOG_DEBUG("on_check_callback: received %d version(s)", update_count);
     /* Post message to UI thread to update list */
     PostMessage(g_hwnd, WM_CHECK_DONE, 0, 0);
 }
 
 static void do_refresh()
 {
+    LOG_DEBUG("do_refresh: checking for updates");
     SetWindowTextA(g_detail, "Loading...");
     ListView_DeleteAllItems(g_list);
     g_selected = -1;
@@ -374,6 +385,7 @@ static void on_download_callback(ag_error_t error,
     (void)user_data;
 
     if (error != AG_OK) {
+        LOG_ERROR("on_download_callback: download failed, error=%d", (int)error);
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             g_downloading = false;
@@ -384,6 +396,7 @@ static void on_download_callback(ag_error_t error,
 
     if (file_path != NULL) {
         /* Download complete — store path and notify UI thread */
+        LOG_INFO("on_download_callback: download complete, file=%s", file_path);
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             g_downloading = false;
@@ -412,6 +425,7 @@ static void do_download()
     if (g_downloading) return;
 
     g_downloading = true;
+    LOG_INFO("do_download: starting download for version %s", g_versions[g_selected].version);
     EnableWindow(g_btn_download, FALSE);
     EnableWindow(g_btn_refresh, FALSE);
     SendMessage(g_progress, PBM_SETPOS, 0, 0);
@@ -427,7 +441,7 @@ int main(int argc, char *argv[])
 {
     (void)argc;
     (void)argv;
-    fprintf(stderr, "ag-manager: This program requires Windows.\n");
+    LOG_ERROR("ag-manager: This program requires Windows.");
     return 1;
 }
 

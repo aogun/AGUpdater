@@ -2,6 +2,7 @@
 #include "http_client.h"
 #include "auth.h"
 #include "version_util.h"
+#include "log.h"
 #include "cJSON.h"
 
 #include <cstdio>
@@ -77,39 +78,51 @@ ag_error_t ag_check_update(
     void *user_data)
 {
     if (!current_version || !callback) {
+        LOG_ERROR("ag_check_update: invalid parameters (current_version=%p, callback=%p)",
+                  (const void *)current_version, (const void *)callback);
         return AG_ERR_INTERNAL;
     }
     if (!ag_semver_validate(std::string(current_version))) {
+        LOG_ERROR("ag_check_update: invalid semver: %s", current_version);
         return AG_ERR_INTERNAL;
     }
 
     /* Capture parameters for thread */
     std::string ver_str(current_version);
     std::string app_str(app_name ? app_name : "");
+    LOG_DEBUG("ag_check_update: app=%s, current_version=%s", app_str.c_str(), ver_str.c_str());
 
     std::thread t([ver_str, app_str, callback, user_data]() {
         std::string path = "/api/v1/client/updates?current_version=" + ver_str;
+        LOG_DEBUG("ag_check_update: HTTP GET %s", path.c_str());
         HttpResult res = http_get(path);
 
         if (!res.ok) {
+            LOG_ERROR("ag_check_update: network error: %s", res.error.c_str());
             callback(AG_ERR_NETWORK, NULL, 0, user_data);
             return;
         }
 
         if (res.status_code == 403) {
+            LOG_ERROR("ag_check_update: authentication failed (HTTP 403)");
             callback(AG_ERR_AUTH, NULL, 0, user_data);
             return;
         }
 
+        LOG_TRACE("ag_check_update: response body length=%zu", res.body.size());
+
         /* Parse JSON response */
         cJSON *root = cJSON_Parse(res.body.c_str());
         if (!root) {
+            LOG_ERROR("ag_check_update: JSON parse failed");
             callback(AG_ERR_INTERNAL, NULL, 0, user_data);
             return;
         }
 
         const cJSON *j_code = cJSON_GetObjectItemCaseSensitive(root, "code");
         if (!cJSON_IsNumber(j_code) || j_code->valueint != 0) {
+            LOG_ERROR("ag_check_update: server returned error code %d",
+                      cJSON_IsNumber(j_code) ? j_code->valueint : -1);
             cJSON_Delete(root);
             callback(AG_ERR_INTERNAL, NULL, 0, user_data);
             return;
@@ -120,12 +133,14 @@ ag_error_t ag_check_update(
         const cJSON *j_updates = cJSON_GetObjectItemCaseSensitive(j_data, "updates");
 
         if (!cJSON_IsBool(j_has_update) || !cJSON_IsArray(j_updates)) {
+            LOG_ERROR("ag_check_update: unexpected JSON structure");
             cJSON_Delete(root);
             callback(AG_ERR_INTERNAL, NULL, 0, user_data);
             return;
         }
 
         if (!cJSON_IsTrue(j_has_update) || cJSON_GetArraySize(j_updates) == 0) {
+            LOG_INFO("ag_check_update: no update available");
             cJSON_Delete(root);
             callback(AG_ERR_NO_UPDATE, NULL, 0, user_data);
             return;
@@ -175,6 +190,7 @@ ag_error_t ag_check_update(
                         sizeof(infos[i].download_url));
         }
 
+        LOG_INFO("ag_check_update: found %d update(s)", count);
         cJSON_Delete(root);
         callback(AG_OK, &infos[0], count, user_data);
     });
@@ -191,8 +207,12 @@ ag_error_t ag_download_update(
     void *user_data)
 {
     if (!info || !callback) {
+        LOG_ERROR("ag_download_update: invalid parameters (info=%p, callback=%p)",
+                  (const void *)info, (const void *)callback);
         return AG_ERR_INTERNAL;
     }
+
+    LOG_INFO("ag_download_update: starting download for version %s", info->version);
 
     /* Copy info for thread */
     ag_version_info_t info_copy = *info;
@@ -206,6 +226,7 @@ ag_error_t ag_download_update(
         /* Download */
         std::string err_msg;
         std::string dl_path(info_copy.download_url);
+        LOG_DEBUG("ag_download_update: url=%s, dest=%s", dl_path.c_str(), file_path.c_str());
 
         bool ok = http_download(dl_path, file_path, info_copy.file_size,
             [&callback, &user_data](int64_t downloaded, int64_t total) -> bool {
@@ -220,15 +241,19 @@ ag_error_t ag_download_update(
             err_msg);
 
         if (!ok) {
+            LOG_ERROR("ag_download_update: download failed: %s", err_msg.c_str());
             ag_download_progress_t progress;
             memset(&progress, 0, sizeof(progress));
             callback(AG_ERR_NETWORK, &progress, NULL, user_data);
             return;
         }
 
+        LOG_INFO("ag_download_update: download complete, verifying SHA256");
+
         /* Verify SHA256 */
         FILE *f = fopen(file_path.c_str(), "rb");
         if (!f) {
+            LOG_ERROR("ag_download_update: cannot open downloaded file: %s", file_path.c_str());
             ag_download_progress_t progress;
             memset(&progress, 0, sizeof(progress));
             callback(AG_ERR_IO, &progress, NULL, user_data);
@@ -256,7 +281,11 @@ ag_error_t ag_download_update(
         }
         std::string actual_sha(hex, hash_len * 2);
 
+        LOG_DEBUG("ag_download_update: SHA256 expected=%s, actual=%s",
+                  info_copy.file_sha256, actual_sha.c_str());
+
         if (actual_sha != std::string(info_copy.file_sha256)) {
+            LOG_ERROR("ag_download_update: SHA256 mismatch");
             remove(file_path.c_str());
             ag_download_progress_t progress;
             memset(&progress, 0, sizeof(progress));
@@ -265,6 +294,7 @@ ag_error_t ag_download_update(
         }
 
         /* Success */
+        LOG_INFO("ag_download_update: verified and saved to %s", file_path.c_str());
         ag_download_progress_t progress;
         progress.total_bytes = info_copy.file_size;
         progress.downloaded_bytes = info_copy.file_size;
@@ -281,8 +311,11 @@ ag_error_t ag_download_update(
 ag_error_t ag_apply_update(const char *zip_path)
 {
     if (!zip_path || !zip_path[0]) {
+        LOG_ERROR("ag_apply_update: invalid zip_path");
         return AG_ERR_INTERNAL;
     }
+
+    LOG_INFO("ag_apply_update: applying update from %s", zip_path);
 
     /* Find ag-updater executable in same directory as current exe */
     std::string exe_dir = get_exe_dir();
@@ -296,6 +329,7 @@ ag_error_t ag_apply_update(const char *zip_path)
     /* Check updater exists */
 #ifdef _WIN32
     if (GetFileAttributesA(updater_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        LOG_ERROR("ag_apply_update: updater not found: %s", updater_path.c_str());
         return AG_ERR_NOT_FOUND;
     }
 
@@ -313,20 +347,27 @@ ag_error_t ag_apply_update(const char *zip_path)
     if (!CreateProcessA(updater_path.c_str(), &cmd_args[0],
                         NULL, NULL, FALSE,
                         0, NULL, NULL, &si, &pi)) {
+        LOG_ERROR("ag_apply_update: CreateProcessA failed (error=%lu)", GetLastError());
         return AG_ERR_IO;
     }
 
+    LOG_INFO("ag_apply_update: updater process launched (pid=%lu)", pi.dwProcessId);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 #else
     if (access(updater_path.c_str(), X_OK) != 0) {
+        LOG_ERROR("ag_apply_update: updater not found or not executable: %s", updater_path.c_str());
         return AG_ERR_NOT_FOUND;
     }
 
     /* Fork and exec */
     pid_t pid = fork();
     if (pid < 0) {
+        LOG_ERROR("ag_apply_update: fork() failed");
         return AG_ERR_IO;
+    }
+    if (pid > 0) {
+        LOG_INFO("ag_apply_update: updater process launched (pid=%d)", pid);
     }
     if (pid == 0) {
         execl(updater_path.c_str(), updater_path.c_str(), zip_path, NULL);

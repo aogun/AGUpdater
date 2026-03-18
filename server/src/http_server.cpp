@@ -1,5 +1,6 @@
 #include "http_server.h"
 #include "cJSON.h"
+#include "log.h"
 #include <openssl/sha.h>
 #include <cstdio>
 #include <cstdlib>
@@ -95,6 +96,8 @@ static void setup_and_run(httplib::Server &svr, AppContext &ctx)
 
     register_admin_routes(svr, ctx);
     register_client_routes(svr, ctx);
+
+    LOG_DEBUG("Routes registered, max upload size: %dMB", ctx.config.max_upload_size_mb);
 }
 
 bool start_server(AppContext &ctx)
@@ -104,20 +107,20 @@ bool start_server(AppContext &ctx)
                                ctx.config.tls.key_file.c_str());
 
         if (!svr.is_valid()) {
-            fprintf(stderr, "Failed to initialize SSL server. "
-                    "Check cert_file and key_file paths.\n");
+            LOG_ERROR("Failed to initialize SSL server. "
+                      "Check cert_file and key_file paths.");
             return false;
         }
 
         setup_and_run(svr, ctx);
 
-        fprintf(stdout, "AGUpdater server starting on https://%s:%d\n",
-                ctx.config.host.c_str(), ctx.config.port);
+        LOG_INFO("AGUpdater server starting on https://%s:%d",
+                 ctx.config.host.c_str(), ctx.config.port);
 
         bool ok = svr.listen(ctx.config.host.c_str(), ctx.config.port);
         if (!ok) {
-            fprintf(stderr, "Server failed to start on %s:%d\n",
-                    ctx.config.host.c_str(), ctx.config.port);
+            LOG_ERROR("Server failed to start on %s:%d",
+                      ctx.config.host.c_str(), ctx.config.port);
         }
         return ok;
     } else {
@@ -125,13 +128,13 @@ bool start_server(AppContext &ctx)
 
         setup_and_run(svr, ctx);
 
-        fprintf(stdout, "AGUpdater server starting on http://%s:%d\n",
-                ctx.config.host.c_str(), ctx.config.port);
+        LOG_INFO("AGUpdater server starting on http://%s:%d",
+                 ctx.config.host.c_str(), ctx.config.port);
 
         bool ok = svr.listen(ctx.config.host.c_str(), ctx.config.port);
         if (!ok) {
-            fprintf(stderr, "Server failed to start on %s:%d\n",
-                    ctx.config.host.c_str(), ctx.config.port);
+            LOG_ERROR("Server failed to start on %s:%d",
+                      ctx.config.host.c_str(), ctx.config.port);
         }
         return ok;
     }

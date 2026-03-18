@@ -1,4 +1,5 @@
 #include "auth.h"
+#include "log.h"
 #include "cJSON.h"
 
 #include <openssl/hmac.h>
@@ -26,15 +27,20 @@ std::string ag_get_device_id()
     char buf[MAX_COMPUTERNAME_LENGTH + 1];
     DWORD size = sizeof(buf);
     if (GetComputerNameA(buf, &size)) {
-        return std::string(buf, size);
+        std::string id(buf, size);
+        LOG_DEBUG("ag_get_device_id: %s", id.c_str());
+        return id;
     }
+    LOG_DEBUG("ag_get_device_id: fallback to UNKNOWN");
     return std::string("UNKNOWN");
 #else
     char buf[256];
     if (gethostname(buf, sizeof(buf)) == 0) {
         buf[sizeof(buf) - 1] = '\0';
+        LOG_DEBUG("ag_get_device_id: %s", buf);
         return std::string(buf);
     }
+    LOG_DEBUG("ag_get_device_id: fallback to UNKNOWN");
     return std::string("UNKNOWN");
 #endif
 }
@@ -54,6 +60,7 @@ std::string ag_hmac_sha256_hex(const std::string &key, const std::string &msg)
     for (unsigned int i = 0; i < result_len; ++i) {
         snprintf(hex + i * 2, 3, "%02x", result[i]);
     }
+    LOG_TRACE("ag_hmac_sha256_hex: msg_len=%zu, result_len=%u", msg.size(), result_len);
     return std::string(hex, result_len * 2);
 }
 
@@ -107,5 +114,7 @@ std::string ag_generate_xauth()
     std::string result(str);
     free(str);
     cJSON_Delete(root);
+    LOG_DEBUG("ag_generate_xauth: device_id=%s, timestamp=%lld, nonce=%s",
+              device_id.c_str(), (long long)timestamp, nonce.c_str());
     return result;
 }

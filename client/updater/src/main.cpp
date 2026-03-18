@@ -5,6 +5,7 @@
  * Target directory is the directory where ag-updater.exe resides.
  */
 #include "version.h"
+#include "log.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -174,7 +175,7 @@ static std::string find_first_dir(unzFile zf)
 static bool extract_file(unzFile zf, const std::string &dest_path)
 {
     if (unzOpenCurrentFile(zf) != UNZ_OK) {
-        fprintf(stderr, "  Failed to open entry in zip\n");
+        LOG_ERROR("Failed to open entry in zip");
         return false;
     }
 
@@ -192,14 +193,14 @@ static bool extract_file(unzFile zf, const std::string &dest_path)
         out = fopen(dest_path.c_str(), "wb");
         if (out != NULL) break;
         if (attempt < RETRY_COUNT - 1) {
-            fprintf(stderr, "  File locked, retry %d/%d: %s\n",
-                    attempt + 1, RETRY_COUNT - 1, dest_path.c_str());
+            LOG_WARN("File locked, retry %d/%d: %s",
+                     attempt + 1, RETRY_COUNT - 1, dest_path.c_str());
             sleep_ms(RETRY_DELAY_MS);
         }
     }
 
     if (out == NULL) {
-        fprintf(stderr, "  Cannot write: %s\n", dest_path.c_str());
+        LOG_ERROR("Cannot write: %s", dest_path.c_str());
         unzCloseCurrentFile(zf);
         return false;
     }
@@ -211,14 +212,14 @@ static bool extract_file(unzFile zf, const std::string &dest_path)
     while ((bytes_read = unzReadCurrentFile(zf, buf, sizeof(buf))) > 0) {
         if (fwrite(buf, 1, static_cast<size_t>(bytes_read), out) !=
             static_cast<size_t>(bytes_read)) {
-            fprintf(stderr, "  Write error: %s\n", dest_path.c_str());
+            LOG_ERROR("Write error: %s", dest_path.c_str());
             ok = false;
             break;
         }
     }
 
     if (bytes_read < 0) {
-        fprintf(stderr, "  Read error from zip\n");
+        LOG_ERROR("Read error from zip");
         ok = false;
     }
 
@@ -229,10 +230,11 @@ static bool extract_file(unzFile zf, const std::string &dest_path)
 
 int main(int argc, char *argv[])
 {
-    fprintf(stdout, "ag-updater v%s\n", APP_VERSION_STRING);
+    log_init_file("ag-updater.log");
+    LOG_INFO("ag-updater v%s", APP_VERSION_STRING);
 
     if (argc < 2) {
-        fprintf(stderr, "Usage: ag-updater <zip_path>\n");
+        LOG_ERROR("Usage: ag-updater <zip_path>");
         return 1;
     }
 
@@ -240,30 +242,31 @@ int main(int argc, char *argv[])
     std::string target_dir = get_exe_dir(argv[0]);
     std::string self_name = get_exe_name();
 
-    fprintf(stdout, "ZIP: %s\n", zip_path.c_str());
-    fprintf(stdout, "Target: %s\n", target_dir.c_str());
+    LOG_DEBUG("ZIP: %s", zip_path.c_str());
+    LOG_DEBUG("Target: %s", target_dir.c_str());
 
     /* Verify zip file exists */
     if (!file_exists(zip_path)) {
-        fprintf(stderr, "Error: ZIP file not found: %s\n", zip_path.c_str());
+        LOG_ERROR("ZIP file not found: %s", zip_path.c_str());
         return 1;
     }
 
     /* Open zip file */
+    LOG_INFO("Opening ZIP: %s", zip_path.c_str());
     unzFile zf = unzOpen(zip_path.c_str());
     if (zf == NULL) {
-        fprintf(stderr, "Error: Cannot open ZIP: %s\n", zip_path.c_str());
+        LOG_ERROR("Cannot open ZIP: %s", zip_path.c_str());
         return 1;
     }
 
     /* Find first directory in zip */
     std::string root_dir = find_first_dir(zf);
     if (root_dir.empty()) {
-        fprintf(stderr, "Error: No directory found in ZIP\n");
+        LOG_ERROR("No directory found in ZIP");
         unzClose(zf);
         return 1;
     }
-    fprintf(stdout, "Root dir in ZIP: %s\n", root_dir.c_str());
+    LOG_INFO("Root dir in ZIP: %s", root_dir.c_str());
 
     /* Extract all files under root_dir to target_dir */
     int extracted = 0;
@@ -271,7 +274,7 @@ int main(int argc, char *argv[])
     int errors = 0;
 
     if (unzGoToFirstFile(zf) != UNZ_OK) {
-        fprintf(stderr, "Error: Cannot read ZIP entries\n");
+        LOG_ERROR("Cannot read ZIP entries");
         unzClose(zf);
         return 1;
     }
@@ -313,7 +316,7 @@ int main(int argc, char *argv[])
             base_name = rel_path.substr(last_sep + 1);
         }
         if (base_name == self_name) {
-            fprintf(stdout, "  Skip self: %s\n", rel_path.c_str());
+            LOG_INFO("Skip self: %s", rel_path.c_str());
             ++skipped;
             continue;
         }
@@ -326,12 +329,12 @@ int main(int argc, char *argv[])
          * directory traversal attacks */
         std::string norm_dest = normalize_path(dest);
         if (norm_dest.find("..") != std::string::npos) {
-            fprintf(stderr, "  SKIP (path traversal): %s\n", rel_path.c_str());
+            LOG_WARN("SKIP (path traversal): %s", rel_path.c_str());
             ++skipped;
             continue;
         }
 
-        fprintf(stdout, "  Extract: %s\n", rel_path.c_str());
+        LOG_DEBUG("Extract: %s", rel_path.c_str());
         if (extract_file(zf, dest)) {
             ++extracted;
         } else {
@@ -342,12 +345,12 @@ int main(int argc, char *argv[])
 
     unzClose(zf);
 
-    fprintf(stdout, "Done: %d extracted, %d skipped, %d errors\n",
-            extracted, skipped, errors);
+    LOG_INFO("Done: %d extracted, %d skipped, %d errors",
+             extracted, skipped, errors);
 
     /* Delete temporary zip file */
     if (remove(zip_path.c_str()) == 0) {
-        fprintf(stdout, "Deleted: %s\n", zip_path.c_str());
+        LOG_INFO("Deleted: %s", zip_path.c_str());
     }
 
     return errors > 0 ? 1 : 0;

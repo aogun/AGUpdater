@@ -1,5 +1,6 @@
 #include "http_client.h"
 #include "auth.h"
+#include "log.h"
 
 #ifndef CPPHTTPLIB_OPENSSL_SUPPORT
 #define CPPHTTPLIB_OPENSSL_SUPPORT
@@ -19,6 +20,7 @@
 static bool parse_server_url(std::string &host, int &port)
 {
     std::string url = AG_SERVER_URL;
+    LOG_DEBUG("parse_server_url: parsing %s", url.c_str());
 
     /* Strip scheme */
     std::string scheme;
@@ -38,6 +40,7 @@ static bool parse_server_url(std::string &host, int &port)
         port = (scheme == "https") ? 443 : 80;
     }
 
+    LOG_DEBUG("parse_server_url: host=%s, port=%d", host.c_str(), port);
     return !host.empty() && port > 0;
 }
 
@@ -46,9 +49,11 @@ static httplib::SSLClient *create_client()
     std::string host;
     int port;
     if (!parse_server_url(host, port)) {
+        LOG_ERROR("create_client: failed to parse server URL");
         return NULL;
     }
 
+    LOG_DEBUG("create_client: connecting to %s:%d", host.c_str(), port);
     httplib::SSLClient *cli = new httplib::SSLClient(host, port);
     /* SSL certificate verification is enabled by default.
      * For development/debugging, temporarily set to false:
@@ -67,6 +72,7 @@ HttpResult http_get(const std::string &path)
     httplib::SSLClient *cli = create_client();
     if (cli == NULL) {
         result.error = "failed to create HTTP client";
+        LOG_ERROR("http_get: failed to create HTTP client");
         return result;
     }
 
@@ -76,17 +82,20 @@ HttpResult http_get(const std::string &path)
     httplib::Headers headers;
     headers.emplace("X-Auth", xauth);
 
+    LOG_TRACE("http_get: sending GET %s", path.c_str());
     auto res = cli->Get(path.c_str(), headers);
     delete cli;
 
     if (!res) {
         result.error = "network error";
+        LOG_WARN("http_get: network error for %s", path.c_str());
         return result;
     }
 
     result.status_code = res->status;
     result.body = res->body;
     result.ok = true;
+    LOG_DEBUG("http_get: status=%d, body_size=%zu", res->status, res->body.size());
     return result;
 }
 
@@ -96,9 +105,13 @@ bool http_download(const std::string &path,
                    ProgressCallback progress_cb,
                    std::string &err_msg)
 {
+    LOG_DEBUG("http_download: path=%s, dest=%s, expected_size=%lld",
+              path.c_str(), dest_file.c_str(), (long long)expected_size);
+
     httplib::SSLClient *cli = create_client();
     if (cli == NULL) {
         err_msg = "failed to create HTTP client";
+        LOG_ERROR("http_download: failed to create HTTP client");
         return false;
     }
 
@@ -113,6 +126,7 @@ bool http_download(const std::string &path,
     if (!out) {
         delete cli;
         err_msg = "cannot create output file: " + dest_file;
+        LOG_ERROR("http_download: cannot create output file: %s", dest_file.c_str());
         return false;
     }
 
@@ -127,6 +141,8 @@ bool http_download(const std::string &path,
                 return false;
             }
             downloaded += static_cast<int64_t>(data_length);
+            LOG_TRACE("http_download: received %lld / %lld bytes",
+                      (long long)downloaded, (long long)expected_size);
             if (progress_cb) {
                 /* Throttle progress callbacks to at most once per 500ms
                  * to avoid flooding the UI thread with messages */
@@ -147,20 +163,24 @@ bool http_download(const std::string &path,
     if (write_error) {
         remove(dest_file.c_str());
         err_msg = "write error";
+        LOG_ERROR("http_download: write error to %s", dest_file.c_str());
         return false;
     }
 
     if (!res) {
         remove(dest_file.c_str());
         err_msg = "network error during download";
+        LOG_ERROR("http_download: network error during download");
         return false;
     }
 
     if (res->status != 200) {
         remove(dest_file.c_str());
         err_msg = "server returned status " + std::to_string(res->status);
+        LOG_ERROR("http_download: server returned status %d", res->status);
         return false;
     }
 
+    LOG_DEBUG("http_download: download complete, %lld bytes", (long long)downloaded);
     return true;
 }

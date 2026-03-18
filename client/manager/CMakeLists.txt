@@ -7,6 +7,7 @@ target_include_directories(ag-manager PRIVATE
 )
 
 target_link_libraries(ag-manager PRIVATE
+    aglog
     ag-update-lib
     cjson
     OpenSSL::SSL
