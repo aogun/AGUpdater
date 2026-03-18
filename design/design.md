@@ -75,7 +75,7 @@ AGUpdater 是一个自动更新系统，由以下组件构成：
   },
   "admin": {
     "username": "admin",
-    "password": "hashed_password"
+    "password_hash": "SHA256(明文密码) 的 hex 值"
   },
   "secret": "shared_hmac_secret",
   "storage_dir": "./packages",
@@ -179,17 +179,9 @@ CREATE INDEX IF NOT EXISTS idx_download_logs_version ON download_logs(version_id
 
 #### 3.3.2 管理接口（需登录）
 
-管理接口使用 Session/Cookie 或 Token 方式进行认证。
+管理接口使用 Token 方式进行认证。登录采用 challenge-response 机制，避免明文传输密码。
 
-**POST /api/v1/admin/login** — 管理员登录
-
-请求：
-```json
-{
-  "username": "admin",
-  "password": "password"
-}
-```
+**GET /api/v1/admin/challenge** — 获取登录 challenge
 
 响应：
 ```json
@@ -197,7 +189,40 @@ CREATE INDEX IF NOT EXISTS idx_download_logs_version ON download_logs(version_id
   "code": 0,
   "message": "success",
   "data": {
-    "token": "jwt_or_session_token"
+    "nonce": "random_16char_string"
+  }
+}
+```
+
+> 服务器生成随机 nonce，有效期 60 秒，使用一次后失效。
+
+**POST /api/v1/admin/login** — 管理员登录
+
+请求：
+```json
+{
+  "username": "admin",
+  "nonce": "从 challenge 接口获取的 nonce",
+  "sign": "HMAC-SHA256(key=SHA256(password), msg=nonce)"
+}
+```
+
+登录流程：
+1. 客户端先调用 `/challenge` 获取 `nonce`
+2. 客户端计算 `password_hash = SHA256(password)`
+3. 客户端计算 `sign = HMAC-SHA256(key=password_hash, msg=nonce)`
+4. 服务器用配置文件中存储的 `password_hash` 和 `nonce` 做同样计算，比对 `sign`
+5. 校验通过返回 token，`nonce` 立即失效
+
+> 配置文件中 `admin.password_hash` 字段存储的是 `SHA256(明文密码)` 的 hex 值，而非明文。
+
+响应：
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "token": "session_token"
   }
 }
 ```
@@ -770,7 +795,55 @@ AGUpdater/
 | OpenSSL / mbedTLS | HTTPS, HMAC-SHA256, SHA256 | 服务器 + 客户端 |
 | minizip / miniz | zip 解压 | 更新程序 |
 | nlohmann/json 或 cJSON | JSON 解析 | 服务器 + 客户端 |
-| cpp-httplib 或同类 | HTTP(S) 服务器/客户端 | 服务器 + 客户端 |
+| cpp-httplib | HTTP(S) 服务器/客户端（header-only） | 服务器 + 客户端 |
+
+### 10.1 HTTP 库选型
+
+**选定方案：[cpp-httplib](https://github.com/yhirose/cpp-httplib)**
+
+选型理由：
+
+| 维度 | 说明 |
+|------|------|
+| 语言标准 | 支持 C++11，与项目要求一致 |
+| 集成方式 | Header-only，单文件 `httplib.h`，无需编译第三方库 |
+| 许可证 | MIT，商业友好 |
+| 功能覆盖 | 同时提供 HTTP 服务器和客户端，满足 ag-server 与 ag-update-lib 的需求 |
+
+**淘汰方案：**
+
+| 库 | 淘汰原因 |
+|----|----------|
+| Crow / Drogon / Pistache | 需要 C++17 或更高标准，不满足 C++11 约束 |
+| mongoose | GPL 许可证，不适合本项目 |
+| civetweb | multipart upload API 已标记废弃，无法稳定支持版本上传功能 |
+
+**功能映射：**
+
+| 设计需求 | cpp-httplib 支持 |
+|----------|------------------|
+| Multipart 文件上传（版本上传） | `Request::has_file()` / `Request::get_file_value()` |
+| 静态文件托管（Vue3 前端） | `Server::set_mount_point()` |
+| 流式文件下载（版本下载） | `Response::set_content_provider()` 支持 chunked streaming |
+| HTTPS | 编译时启用 OpenSSL 即可使用 `SSLServer` / `SSLClient` |
+
+**CMake 集成方式：**
+
+cpp-httplib 为 header-only 库，将 `httplib.h` 放入 `third_party/cpp-httplib/` 目录即可。需开启 OpenSSL 支持以使用 HTTPS：
+
+```cmake
+# 查找 OpenSSL
+find_package(OpenSSL REQUIRED)
+
+# 添加 cpp-httplib 头文件路径
+target_include_directories(ag-server PRIVATE ${PROJECT_SOURCE_DIR}/third_party/cpp-httplib)
+
+# 启用 HTTPS 支持
+target_compile_definitions(ag-server PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+
+# 链接 OpenSSL
+target_link_libraries(ag-server PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+```
 
 ---
 
