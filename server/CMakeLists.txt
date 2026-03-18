@@ -25,7 +25,7 @@ target_link_libraries(ag-server PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(ag-server PRIVATE ws2_32)
+    target_link_libraries(ag-server PRIVATE ws2_32 crypt32)
 endif()
 
 # Install web resources alongside the executable

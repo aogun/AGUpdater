@@ -14,5 +14,5 @@ target_link_libraries(ag-manager PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(ag-manager PRIVATE comctl32 gdi32 user32)
+    target_link_libraries(ag-manager PRIVATE comctl32 gdi32 user32 crypt32 ws2_32)
 endif()
