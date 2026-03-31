@@ -29,8 +29,11 @@ if(WIN32)
     target_link_libraries(ag-server PRIVATE ws2_32 crypt32)
 endif()
 
-# Install web resources alongside the executable
-file(GLOB WEB_FILES ${CMAKE_CURRENT_SOURCE_DIR}/web/*)
-if(WEB_FILES)
-    file(COPY ${WEB_FILES} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/web)
-endif()
+# Copy web resources to build directory on every build
+add_custom_target(copy-web ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/web
+        ${CMAKE_CURRENT_BINARY_DIR}/web
+    COMMENT "Copying web resources"
+)
+add_dependencies(ag-server copy-web)
