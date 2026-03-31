@@ -190,10 +190,10 @@
                          @dragleave.prevent="dragging = false"
                          @drop.prevent="onFileDrop">
                         <input type="file" accept=".zip" @change="onFileSelect" ref="fileInput" style="display:none">
-                        <span v-if="!uploadFile" @click="fileInput.click()" style="cursor:pointer">
+                        <span v-if="!uploadFile" @click="console.log('[click] fileInput ref:', fileInput); fileInput && fileInput.click()" style="cursor:pointer">
                             Click or drag ZIP file here
                         </span>
-                        <span v-else @click="fileInput.click()" style="cursor:pointer">
+                        <span v-else @click="console.log('[click] fileInput ref:', fileInput); fileInput && fileInput.click()" style="cursor:pointer">
                             {{ uploadFile.name }} ({{ formatSize(uploadFile.size) }})
                         </span>
                     </div>
@@ -487,28 +487,40 @@
             /* Upload */
             function extractVersionFromFilename(filename) {
                 /* Match version pattern like xxx-1.2.3.zip or xxx_1.2.3.zip */
+                console.log('[extractVersion] input filename:', JSON.stringify(filename));
                 const match = filename.match(/[-_](\d+\.\d+\.\d+)\.zip$/i);
+                console.log('[extractVersion] regex match result:', match);
                 return match ? match[1] : '';
             }
 
             function applyFile(file) {
-                if (!file) return;
+                console.log('[applyFile] called, file:', file);
+                if (!file) { console.log('[applyFile] file is null, skip'); return; }
+                console.log('[applyFile] file.name:', file.name);
                 uploadFile.value = file;
                 const ver = extractVersionFromFilename(file.name);
+                console.log('[applyFile] extracted version:', JSON.stringify(ver));
                 if (ver) {
                     uploadForm.value.version = ver;
+                    console.log('[applyFile] set uploadForm.version to:', ver);
+                } else {
+                    console.log('[applyFile] no version matched from filename');
                 }
             }
 
             function onFileSelect(e) {
+                console.log('[onFileSelect] triggered, files:', e.target.files);
                 applyFile(e.target.files[0] || null);
             }
 
             function onFileDrop(e) {
+                console.log('[onFileDrop] triggered, files:', e.dataTransfer.files);
                 dragging.value = false;
                 const file = e.dataTransfer.files[0] || null;
                 if (file && file.name.toLowerCase().endsWith('.zip')) {
                     applyFile(file);
+                } else {
+                    console.log('[onFileDrop] not a zip file or no file');
                 }
             }
 
