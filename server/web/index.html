@@ -190,10 +190,10 @@
                          @dragleave.prevent="dragging = false"
                          @drop.prevent="onFileDrop">
                         <input type="file" accept=".zip" @change="onFileSelect" ref="fileInput" style="display:none">
-                        <span v-if="!uploadFile" @click="console.log('[click] fileInput ref:', fileInput); fileInput && fileInput.click()" style="cursor:pointer">
+                        <span v-if="!uploadFile" @click="triggerFileInput" style="cursor:pointer">
                             Click or drag ZIP file here
                         </span>
-                        <span v-else @click="console.log('[click] fileInput ref:', fileInput); fileInput && fileInput.click()" style="cursor:pointer">
+                        <span v-else @click="triggerFileInput" style="cursor:pointer">
                             {{ uploadFile.name }} ({{ formatSize(uploadFile.size) }})
                         </span>
                     </div>
@@ -508,6 +508,15 @@
                 }
             }
 
+            function triggerFileInput() {
+                console.log('[triggerFileInput] fileInput.value:', fileInput.value);
+                if (fileInput.value) {
+                    fileInput.value.click();
+                } else {
+                    console.log('[triggerFileInput] ERROR: fileInput ref is null!');
+                }
+            }
+
             function onFileSelect(e) {
                 console.log('[onFileSelect] triggered, files:', e.target.files);
                 applyFile(e.target.files[0] || null);
@@ -650,7 +659,7 @@
                 selectedVersions, allSelected, toggleAll,
                 loadVersions, deleteSingle, batchDelete,
                 showUpload, uploadForm, uploadFile, uploading, uploadProgress, uploadError, dragging, fileInput,
-                onFileSelect, onFileDrop, doUpload,
+                triggerFileInput, onFileSelect, onFileDrop, doUpload,
                 showEdit, editForm, startEdit, doEdit,
                 statsVersion, downloadLogs, statsPage, statsTotalPages, statsPaginationRange,
                 viewStats, loadStats,
