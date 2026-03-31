@@ -47,3 +47,61 @@ if(WIN32 AND MINGW AND MINGW_RUNTIME_DLL_PATHS)
         )
     endforeach()
 endif()
+
+# =============================================================================
+# ag-server-pack: package ag-server with all dependencies into a ZIP
+# =============================================================================
+
+# Parse version from version.h
+file(STRINGS "${CMAKE_SOURCE_DIR}/src/version.h" _ver_major REGEX "APP_VERSION_MAJOR")
+file(STRINGS "${CMAKE_SOURCE_DIR}/src/version.h" _ver_minor REGEX "APP_VERSION_MINOR")
+file(STRINGS "${CMAKE_SOURCE_DIR}/src/version.h" _ver_patch REGEX "APP_VERSION_PATCH")
+string(REGEX MATCH "[0-9]+" AG_VER_MAJOR "${_ver_major}")
+string(REGEX MATCH "[0-9]+" AG_VER_MINOR "${_ver_minor}")
+string(REGEX MATCH "[0-9]+" AG_VER_PATCH "${_ver_patch}")
+set(AG_SERVER_VERSION "${AG_VER_MAJOR}.${AG_VER_MINOR}.${AG_VER_PATCH}")
+
+set(PACK_NAME "ag-server-${AG_SERVER_VERSION}")
+set(PACK_DIR "${CMAKE_BINARY_DIR}/${PACK_NAME}")
+
+add_custom_target(ag-server-pack
+    DEPENDS ag-server copy-web
+    COMMENT "Packaging ag-server ${AG_SERVER_VERSION}..."
+
+    # Clean and create pack directory
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "${PACK_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${PACK_DIR}"
+
+    # Copy ag-server executable
+    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:ag-server>" "${PACK_DIR}/"
+
+    # Copy web resources
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_BINARY_DIR}/web" "${PACK_DIR}/web"
+
+    # Copy config.json from data/
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${CMAKE_SOURCE_DIR}/data/config.json" "${PACK_DIR}/"
+
+    # Create zip
+    COMMAND ${CMAKE_COMMAND} -E tar "cf" "${CMAKE_BINARY_DIR}/${PACK_NAME}.zip"
+        --format=zip "${PACK_NAME}"
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# Copy MinGW runtime DLLs into pack directory
+if(WIN32 AND MINGW AND MINGW_RUNTIME_DLL_PATHS)
+    foreach(dll_path ${MINGW_RUNTIME_DLL_PATHS})
+        add_custom_command(TARGET ag-server-pack POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${dll_path}" "${PACK_DIR}/"
+        )
+    endforeach()
+    # Re-create zip after DLLs are copied
+    add_custom_command(TARGET ag-server-pack POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E remove -f "${CMAKE_BINARY_DIR}/${PACK_NAME}.zip"
+        COMMAND ${CMAKE_COMMAND} -E tar "cf" "${CMAKE_BINARY_DIR}/${PACK_NAME}.zip"
+            --format=zip "${PACK_NAME}"
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+endif()
