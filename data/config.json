@@ -1,11 +1,15 @@
 {
   "host": "0.0.0.0",
   "port": 8080,
-  "admin": {
-    "username": "admin",
-    "password_hash": ""
+  "tls": {
+    "cert_file": "",
+    "key_file": "server.key"
   },
-  "secret": "",
+  "admin": {
+    "username": "Admin",
+    "password_hash": "c1c224b03cd9bc7b6a86d77f5dace40191766c485cd55dc48caf9ac873335d6f"
+  },
+  "secret": "default_secret",
   "storage_dir": "./packages",
   "db_path": "./agupdate.db",
   "max_upload_size_mb": 100
