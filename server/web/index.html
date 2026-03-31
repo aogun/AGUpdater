@@ -397,10 +397,23 @@
             }
 
             /* Versions CRUD */
+            function compareSemver(a, b) {
+                const pa = a.split('.').map(Number);
+                const pb = b.split('.').map(Number);
+                for (let i = 0; i < 3; i++) {
+                    const va = pa[i] || 0;
+                    const vb = pb[i] || 0;
+                    if (va !== vb) return vb - va; /* descending */
+                }
+                return 0;
+            }
+
             async function loadVersions() {
                 try {
                     const data = await apiJson('/admin/versions?page=' + page.value + '&page_size=' + pageSize);
                     if (data.code === 0) {
+                        /* Sort by version descending */
+                        data.data.items.sort((a, b) => compareSemver(a.version, b.version));
                         versions.value = data.data.items;
                         totalCount.value = data.data.total;
                         selectedVersions.value = [];
@@ -455,8 +468,20 @@
             }
 
             /* Upload */
+            function extractVersionFromFilename(filename) {
+                /* Match version pattern like xxx-1.2.3.zip or xxx_1.2.3.zip */
+                const match = filename.match(/[-_](\d+\.\d+\.\d+)\.zip$/i);
+                return match ? match[1] : '';
+            }
+
             function onFileSelect(e) {
                 uploadFile.value = e.target.files[0] || null;
+                if (uploadFile.value) {
+                    const ver = extractVersionFromFilename(uploadFile.value.name);
+                    if (ver) {
+                        uploadForm.value.version = ver;
+                    }
+                }
             }
 
             async function doUpload() {
