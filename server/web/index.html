@@ -190,10 +190,10 @@
                          @dragleave.prevent="dragging = false"
                          @drop.prevent="onFileDrop">
                         <input type="file" accept=".zip" @change="onFileSelect" ref="fileInput" style="display:none">
-                        <span v-if="!uploadFile" @click="$refs.fileInput.click()" style="cursor:pointer">
+                        <span v-if="!uploadFile" @click="fileInput.click()" style="cursor:pointer">
                             Click or drag ZIP file here
                         </span>
-                        <span v-else @click="$refs.fileInput.click()" style="cursor:pointer">
+                        <span v-else @click="fileInput.click()" style="cursor:pointer">
                             {{ uploadFile.name }} ({{ formatSize(uploadFile.size) }})
                         </span>
                     </div>
@@ -305,6 +305,7 @@
             const uploadProgress = ref(0);
             const uploadError = ref('');
             const dragging = ref(false);
+            const fileInput = ref(null);
 
             /* Edit */
             const showEdit = ref(false);
@@ -636,7 +637,7 @@
                 versions, page, totalPages, totalCount, paginationRange,
                 selectedVersions, allSelected, toggleAll,
                 loadVersions, deleteSingle, batchDelete,
-                showUpload, uploadForm, uploadFile, uploading, uploadProgress, uploadError, dragging,
+                showUpload, uploadForm, uploadFile, uploading, uploadProgress, uploadError, dragging, fileInput,
                 onFileSelect, onFileDrop, doUpload,
                 showEdit, editForm, startEdit, doEdit,
                 statsVersion, downloadLogs, statsPage, statsTotalPages, statsPaginationRange,
