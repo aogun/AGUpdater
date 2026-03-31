@@ -47,6 +47,9 @@
         .progress-bar-fill { height: 100%; background: #1a73e8; transition: width 0.3s; }
         a { color: #1a73e8; text-decoration: none; cursor: pointer; }
         a:hover { text-decoration: underline; }
+        .drop-zone { border: 2px dashed #ddd; border-radius: 6px; padding: 20px; text-align: center; color: #999; font-size: 13px; transition: border-color 0.2s, background 0.2s; }
+        .drop-zone:hover { border-color: #1a73e8; }
+        .drop-zone-active { border-color: #1a73e8; background: #e8f0fe; }
     </style>
 </head>
 <body>
@@ -181,7 +184,19 @@
                 </div>
                 <div class="form-group">
                     <label>ZIP File</label>
-                    <input type="file" accept=".zip" @change="onFileSelect">
+                    <div class="drop-zone"
+                         :class="{ 'drop-zone-active': dragging }"
+                         @dragover.prevent="dragging = true"
+                         @dragleave.prevent="dragging = false"
+                         @drop.prevent="onFileDrop">
+                        <input type="file" accept=".zip" @change="onFileSelect" ref="fileInput" style="display:none">
+                        <span v-if="!uploadFile" @click="$refs.fileInput.click()" style="cursor:pointer">
+                            Click or drag ZIP file here
+                        </span>
+                        <span v-else @click="$refs.fileInput.click()" style="cursor:pointer">
+                            {{ uploadFile.name }} ({{ formatSize(uploadFile.size) }})
+                        </span>
+                    </div>
                 </div>
                 <div v-if="uploading" style="margin-top:10px">
                     <div class="progress-bar"><div class="progress-bar-fill" :style="{width: uploadProgress + '%'}"></div></div>
@@ -289,6 +304,7 @@
             const uploading = ref(false);
             const uploadProgress = ref(0);
             const uploadError = ref('');
+            const dragging = ref(false);
 
             /* Edit */
             const showEdit = ref(false);
@@ -474,13 +490,24 @@
                 return match ? match[1] : '';
             }
 
+            function applyFile(file) {
+                if (!file) return;
+                uploadFile.value = file;
+                const ver = extractVersionFromFilename(file.name);
+                if (ver) {
+                    uploadForm.value.version = ver;
+                }
+            }
+
             function onFileSelect(e) {
-                uploadFile.value = e.target.files[0] || null;
-                if (uploadFile.value) {
-                    const ver = extractVersionFromFilename(uploadFile.value.name);
-                    if (ver) {
-                        uploadForm.value.version = ver;
-                    }
+                applyFile(e.target.files[0] || null);
+            }
+
+            function onFileDrop(e) {
+                dragging.value = false;
+                const file = e.dataTransfer.files[0] || null;
+                if (file && file.name.toLowerCase().endsWith('.zip')) {
+                    applyFile(file);
                 }
             }
 
@@ -609,8 +636,8 @@
                 versions, page, totalPages, totalCount, paginationRange,
                 selectedVersions, allSelected, toggleAll,
                 loadVersions, deleteSingle, batchDelete,
-                showUpload, uploadForm, uploadFile, uploading, uploadProgress, uploadError,
-                onFileSelect, doUpload,
+                showUpload, uploadForm, uploadFile, uploading, uploadProgress, uploadError, dragging,
+                onFileSelect, onFileDrop, doUpload,
                 showEdit, editForm, startEdit, doEdit,
                 statsVersion, downloadLogs, statsPage, statsTotalPages, statsPaginationRange,
                 viewStats, loadStats,
