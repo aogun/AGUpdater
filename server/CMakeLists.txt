@@ -37,3 +37,13 @@ add_custom_target(copy-web ALL
     COMMENT "Copying web resources"
 )
 add_dependencies(ag-server copy-web)
+
+# Copy MinGW runtime DLLs next to ag-server
+if(WIN32 AND MINGW AND MINGW_RUNTIME_DLL_PATHS)
+    foreach(dll_path ${MINGW_RUNTIME_DLL_PATHS})
+        add_custom_command(TARGET ag-server POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${dll_path}" "$<TARGET_FILE_DIR:ag-server>"
+        )
+    endforeach()
+endif()

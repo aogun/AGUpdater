@@ -47,13 +47,12 @@ add_subdirectory(server)
 add_subdirectory(client)
 
 # =============================================================================
-# Windows MinGW: collect runtime DLLs to output directories
+# Windows MinGW: find runtime DLLs and expose as a list for sub-projects
 # =============================================================================
 if(WIN32 AND MINGW)
     get_filename_component(MINGW_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
 
-    # DLLs commonly needed by MinGW-built programs
-    set(MINGW_RUNTIME_DLLS
+    set(MINGW_RUNTIME_DLL_NAMES
         libwinpthread-1.dll
         libgcc_s_seh-1.dll
         libstdc++-6.dll
@@ -62,49 +61,14 @@ if(WIN32 AND MINGW)
         zlib1.dll
     )
 
-    # Find each DLL
-    set(FOUND_DLLS "")
-    foreach(dll ${MINGW_RUNTIME_DLLS})
+    set(MINGW_RUNTIME_DLL_PATHS "" CACHE INTERNAL "")
+    foreach(dll ${MINGW_RUNTIME_DLL_NAMES})
         find_file(DLL_${dll} ${dll} PATHS "${MINGW_BIN_DIR}" NO_DEFAULT_PATH)
         if(DLL_${dll})
-            list(APPEND FOUND_DLLS "${DLL_${dll}}")
+            list(APPEND MINGW_RUNTIME_DLL_PATHS "${DLL_${dll}}")
         else()
             message(STATUS "Optional DLL not found: ${dll}")
         endif()
     endforeach()
-
-    if(FOUND_DLLS)
-        # Copy DLLs next to ag-server
-        add_custom_command(TARGET ag-server POST_BUILD
-            COMMENT "Copying runtime DLLs to ag-server output directory"
-        )
-        foreach(dll_path ${FOUND_DLLS})
-            add_custom_command(TARGET ag-server POST_BUILD APPEND
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${dll_path}" "$<TARGET_FILE_DIR:ag-server>"
-            )
-        endforeach()
-
-        # Copy DLLs next to ag-manager
-        add_custom_command(TARGET ag-manager POST_BUILD
-            COMMENT "Copying runtime DLLs to ag-manager output directory"
-        )
-        foreach(dll_path ${FOUND_DLLS})
-            add_custom_command(TARGET ag-manager POST_BUILD APPEND
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${dll_path}" "$<TARGET_FILE_DIR:ag-manager>"
-            )
-        endforeach()
-
-        # Copy DLLs next to ag-updater (only zlib + runtime)
-        add_custom_command(TARGET ag-updater POST_BUILD
-            COMMENT "Copying runtime DLLs to ag-updater output directory"
-        )
-        foreach(dll_path ${FOUND_DLLS})
-            add_custom_command(TARGET ag-updater POST_BUILD APPEND
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${dll_path}" "$<TARGET_FILE_DIR:ag-updater>"
-            )
-        endforeach()
-    endif()
+    set(MINGW_RUNTIME_DLL_PATHS "${MINGW_RUNTIME_DLL_PATHS}" CACHE INTERNAL "")
 endif()

@@ -64,6 +64,16 @@ if(WIN32)
     target_link_libraries(ag-manager PRIVATE comctl32 gdi32 user32 crypt32 ws2_32)
 endif()
 
+# Copy MinGW runtime DLLs next to ag-manager
+if(WIN32 AND MINGW AND MINGW_RUNTIME_DLL_PATHS)
+    foreach(dll_path ${MINGW_RUNTIME_DLL_PATHS})
+        add_custom_command(TARGET ag-manager POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${dll_path}" "$<TARGET_FILE_DIR:ag-manager>"
+        )
+    endforeach()
+endif()
+
 # --- ag-updater (update extractor) ---
 
 add_executable(ag-updater
@@ -79,3 +89,13 @@ target_link_libraries(ag-updater PRIVATE
     minizip
     ZLIB::ZLIB
 )
+
+# Copy MinGW runtime DLLs next to ag-updater
+if(WIN32 AND MINGW AND MINGW_RUNTIME_DLL_PATHS)
+    foreach(dll_path ${MINGW_RUNTIME_DLL_PATHS})
+        add_custom_command(TARGET ag-updater POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${dll_path}" "$<TARGET_FILE_DIR:ag-updater>"
+        )
+    endforeach()
+endif()
