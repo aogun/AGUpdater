@@ -42,12 +42,8 @@ target_link_libraries(minizip PRIVATE ZLIB::ZLIB)
 add_library(aglog STATIC ${CMAKE_SOURCE_DIR}/src/log.cpp)
 target_include_directories(aglog PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
-# Sub-projects
-add_subdirectory(server)
-add_subdirectory(client)
-
 # =============================================================================
-# Windows MinGW: find runtime DLLs and expose as a list for sub-projects
+# Windows MinGW: find runtime DLLs before sub-projects use them
 # =============================================================================
 if(WIN32 AND MINGW)
     get_filename_component(MINGW_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
@@ -72,3 +68,7 @@ if(WIN32 AND MINGW)
     endforeach()
     set(MINGW_RUNTIME_DLL_PATHS "${MINGW_RUNTIME_DLL_PATHS}" CACHE INTERNAL "")
 endif()
+
+# Sub-projects
+add_subdirectory(server)
+add_subdirectory(client)
