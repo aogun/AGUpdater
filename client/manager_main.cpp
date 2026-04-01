@@ -90,10 +90,22 @@ static std::string format_size(int64_t bytes)
     return std::string(buf);
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow)
 {
+    /* Parse -l <level> from command line before logging starts */
+    {
+        int argc = __argc;
+        char **argv = __argv;
+        for (int i = 1; i < argc; ++i) {
+            if (std::string(argv[i]) == "-l" && i + 1 < argc) {
+                g_log_level = log_level_from_name(argv[++i]);
+            }
+        }
+    }
+
     log_init_file("ag-manager.log");
     LOG_INFO("ag-manager v%s starting", APP_VERSION_STRING);
+    LOG_INFO("Log level: %s", log_level_name(g_log_level));
     g_hinst = hInstance;
 
     /* Init common controls for ListView and ProgressBar */

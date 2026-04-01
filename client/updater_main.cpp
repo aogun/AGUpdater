@@ -271,7 +271,7 @@ int main(int argc, char *argv[])
     LOG_INFO("ag-updater v%s", APP_VERSION_STRING);
 
     if (argc < 2) {
-        LOG_ERROR("Usage: ag-updater <zip_path> [--launch <program>]");
+        LOG_ERROR("Usage: ag-updater <zip_path> [--launch <program>] [-l <level>]");
         return 1;
     }
 
@@ -282,8 +282,11 @@ int main(int argc, char *argv[])
     for (int i = 2; i < argc; ++i) {
         if (std::string(argv[i]) == "--launch" && i + 1 < argc) {
             launch_app = argv[++i];
+        } else if (std::string(argv[i]) == "-l" && i + 1 < argc) {
+            g_log_level = log_level_from_name(argv[++i]);
         }
     }
+    LOG_INFO("Log level: %s", log_level_name(g_log_level));
 
     std::string target_dir = get_exe_dir(argv[0]);
     std::string self_name = get_exe_name();
