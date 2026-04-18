@@ -712,6 +712,14 @@ GUI 工具，使用 Win32 API 构建原生 Windows 界面，提供界面供用�
 4. 下载完成后提示用户是否立即安装
 5. 用户确认安装后调用 `ag_apply_update` 启动更新程序
 
+### 6.4 列表排序
+
+- 默认按 Version 列降序（最新版本在顶部）
+- 点击列标题切换排序列；再次点击同一列切换升/降序
+- Version 列按 semver（major.minor.patch）数值比较，Size 按字节数比较，其他列按字符串比较
+- 当前排序列的表头显示升/降序箭头（`HDF_SORTUP` / `HDF_SORTDOWN`）
+- 日期列显示格式统一为 `YYYY-MM-DD HH:MM:SS`（由服务器返回的 ISO-8601 `...T...Z` 转换而来）
+
 ---
 
 ## 7. 身份校验设计

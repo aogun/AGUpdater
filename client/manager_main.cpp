@@ -11,6 +11,7 @@
 
 #include <windows.h>
 #include <commctrl.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -70,6 +71,10 @@ static bool g_downloading = false;
 static int g_dl_percent = 0;
 static std::string g_dl_file_path;
 
+/* List sort state. Default: sort by Version (col 0) descending. */
+static int g_sort_col = 0;
+static bool g_sort_desc = true;
+
 /* Forward declarations */
 static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 static void do_refresh();
@@ -88,6 +93,78 @@ static std::string format_size(int64_t bytes)
         snprintf(buf, sizeof(buf), "%.1f MB", bytes / (1024.0 * 1024.0));
     }
     return std::string(buf);
+}
+
+/* ISO-8601 "2026-03-18T08:00:18Z" → "2026-03-18 08:00:18" for display. */
+static std::string format_datetime(const char *iso)
+{
+    if (!iso || !iso[0]) return std::string();
+    std::string s(iso);
+    size_t t = s.find('T');
+    if (t != std::string::npos) s[t] = ' ';
+    if (!s.empty() && s.back() == 'Z') s.pop_back();
+    return s;
+}
+
+static void parse_semver(const char *v, int out[3])
+{
+    out[0] = out[1] = out[2] = 0;
+    if (!v) return;
+    sscanf(v, "%d.%d.%d", &out[0], &out[1], &out[2]);
+}
+
+/* Returns <0 / 0 / >0. col: 0=version (semver), 1=desc, 2=size, 3=date string. */
+static int compare_version_info(int col, const ag_version_info_t &a,
+                                 const ag_version_info_t &b)
+{
+    switch (col) {
+    case 0: {
+        int va[3], vb[3];
+        parse_semver(a.version, va);
+        parse_semver(b.version, vb);
+        for (int i = 0; i < 3; ++i) {
+            if (va[i] != vb[i]) return va[i] - vb[i];
+        }
+        return 0;
+    }
+    case 1: return strcmp(a.description, b.description);
+    case 2: {
+        if (a.file_size < b.file_size) return -1;
+        if (a.file_size > b.file_size) return 1;
+        return 0;
+    }
+    case 3: return strcmp(a.created_at, b.created_at);
+    default: return 0;
+    }
+}
+
+static void sort_versions_locked()
+{
+    int col = g_sort_col;
+    bool desc = g_sort_desc;
+    std::sort(g_versions.begin(), g_versions.end(),
+        [col, desc](const ag_version_info_t &a, const ag_version_info_t &b) {
+            int c = compare_version_info(col, a, b);
+            return desc ? (c > 0) : (c < 0);
+        });
+}
+
+static void update_sort_indicator()
+{
+    HWND header = (HWND)SendMessageW(g_list, LVM_GETHEADER, 0, 0);
+    if (!header) return;
+    int col_count = (int)SendMessageW(header, HDM_GETITEMCOUNT, 0, 0);
+    for (int i = 0; i < col_count; ++i) {
+        HDITEMW hdi;
+        memset(&hdi, 0, sizeof(hdi));
+        hdi.mask = HDI_FORMAT;
+        SendMessageW(header, HDM_GETITEMW, (WPARAM)i, (LPARAM)&hdi);
+        hdi.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+        if (i == g_sort_col) {
+            hdi.fmt |= g_sort_desc ? HDF_SORTDOWN : HDF_SORTUP;
+        }
+        SendMessageW(header, HDM_SETITEMW, (WPARAM)i, (LPARAM)&hdi);
+    }
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow)
@@ -183,6 +260,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         col.cx = 140; col.pszText = (LPWSTR)L"Date";        col.iSubItem = 3;
         SendMessageW(g_list, LVM_INSERTCOLUMNW, 3, (LPARAM)&col);
 
+        update_sort_indicator();
+
         /* Refresh button */
         g_btn_refresh = CreateWindowW(L"BUTTON", L"Refresh",
             WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -232,6 +311,32 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     EnableWindow(g_btn_download, !g_downloading);
                     update_detail();
                 }
+            } else if (nmhdr->code == LVN_COLUMNCLICK) {
+                NMLISTVIEW *nmlv = (NMLISTVIEW *)lParam;
+                int col = nmlv->iSubItem;
+                if (col == g_sort_col) {
+                    g_sort_desc = !g_sort_desc;
+                } else {
+                    g_sort_col = col;
+                    /* Version / Size / Date default descending (newest/largest first);
+                     * Description defaults ascending (A→Z). */
+                    g_sort_desc = (col != 1);
+                }
+                LOG_DEBUG("Sort by col=%d desc=%d", g_sort_col, g_sort_desc);
+                {
+                    std::lock_guard<std::mutex> lock(g_mutex);
+                    sort_versions_locked();
+                }
+                SendMessageW(g_list, LVM_DELETEALLITEMS, 0, 0);
+                {
+                    std::lock_guard<std::mutex> lock(g_mutex);
+                    for (int i = 0; i < (int)g_versions.size(); ++i) {
+                        add_list_item(i, g_versions[i]);
+                    }
+                }
+                g_selected = -1;
+                EnableWindow(g_btn_download, FALSE);
+                update_sort_indicator();
             }
         }
         break;
@@ -263,10 +368,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         SendMessageW(g_list, LVM_DELETEALLITEMS, 0, 0);
         {
             std::lock_guard<std::mutex> lock(g_mutex);
+            sort_versions_locked();
             for (int i = 0; i < (int)g_versions.size(); ++i) {
                 add_list_item(i, g_versions[i]);
             }
         }
+        update_sort_indicator();
         if (g_versions.empty()) {
             SetWindowTextW(g_detail, L"No versions available.");
         } else {
@@ -362,7 +469,7 @@ static void add_list_item(int index, const ag_version_info_t &info)
     std::wstring size_w = utf8_to_wide(format_size(info.file_size));
     lv_set_item_text_w(g_list, index, 2, size_w.c_str());
 
-    std::wstring date_w = utf8_to_wide(info.created_at);
+    std::wstring date_w = utf8_to_wide(format_datetime(info.created_at));
     lv_set_item_text_w(g_list, index, 3, date_w.c_str());
 }
 
@@ -380,7 +487,7 @@ static void update_detail()
         L"Description: " + utf8_to_wide(v.description) + L"\r\n" +
         L"Size: " + utf8_to_wide(format_size(v.file_size)) + L"\r\n" +
         L"SHA256: " + utf8_to_wide(v.file_sha256) + L"\r\n" +
-        L"Date: " + utf8_to_wide(v.created_at);
+        L"Date: " + utf8_to_wide(format_datetime(v.created_at));
     SetWindowTextW(g_detail, text.c_str());
 }
 
