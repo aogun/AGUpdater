@@ -4,6 +4,8 @@
 set(AG_UPDATER_NAME "ag-updater" CACHE STRING "Updater executable file name")
 set(AG_SERVER_URL "https://localhost:8443" CACHE STRING "Server URL")
 set(AG_SECRET "default_secret" CACHE STRING "HMAC shared secret")
+option(AG_SSL_VERIFY
+    "Verify server TLS certificate chain (disable only for dev/self-signed)" ON)
 
 add_library(ag-update-lib STATIC
     lib/src/ag_updater.cpp
@@ -27,6 +29,13 @@ target_compile_definitions(ag-update-lib PRIVATE
     AG_SERVER_URL="${AG_SERVER_URL}"
     AG_SECRET="${AG_SECRET}"
 )
+
+if(AG_SSL_VERIFY)
+    target_compile_definitions(ag-update-lib PRIVATE AG_SSL_VERIFY=1)
+else()
+    target_compile_definitions(ag-update-lib PRIVATE AG_SSL_VERIFY=0)
+    message(WARNING "AG_SSL_VERIFY=OFF — client will accept any HTTPS certificate")
+endif()
 
 find_package(Threads REQUIRED)
 

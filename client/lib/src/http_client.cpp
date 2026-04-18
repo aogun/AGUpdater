@@ -16,6 +16,10 @@
 #define AG_SERVER_URL "https://localhost:8443"
 #endif
 
+#ifndef AG_SSL_VERIFY
+#define AG_SSL_VERIFY 1  /* secure by default */
+#endif
+
 /* Parse host, port, and scheme from AG_SERVER_URL */
 static bool parse_server_url(std::string &scheme, std::string &host, int &port)
 {
@@ -88,9 +92,15 @@ static httplib::SSLClient *create_ssl_client(std::string &endpoint)
     endpoint = endpoint_str(scheme, host, port);
     LOG_DEBUG("create_client: HTTPS connecting to %s", endpoint.c_str());
     httplib::SSLClient *cli = new httplib::SSLClient(host, port);
-    /* SSL certificate verification is enabled by default.
-     * For development/debugging, temporarily set to false:
-     *   cli->enable_server_certificate_verification(false); */
+#if !AG_SSL_VERIFY
+    cli->enable_server_certificate_verification(false);
+    static bool warned_once = false;
+    if (!warned_once) {
+        warned_once = true;
+        LOG_WARN("HTTPS certificate verification is DISABLED (built with "
+                 "-DAG_SSL_VERIFY=OFF); server identity is NOT authenticated");
+    }
+#endif
     cli->set_connection_timeout(10, 0);
     cli->set_read_timeout(30, 0);
     return cli;

@@ -469,17 +469,21 @@ CREATE INDEX IF NOT EXISTS idx_download_logs_version ON download_logs(version_id
 set(AG_UPDATER_NAME "ag-updater" CACHE STRING "更新程序可执行文件名")
 set(AG_SERVER_URL "https://localhost:8443" CACHE STRING "服务器地址")
 set(AG_SECRET "default_secret" CACHE STRING "HMAC 校验密钥")
+option(AG_SSL_VERIFY "校验服务器 TLS 证书链（仅在自签名调试时关闭）" ON)
 ```
 
-编译时通过 `add_definitions` 将这些值注入代码：
+编译时通过 `target_compile_definitions` 将这些值注入代码：
 
 ```cmake
-add_definitions(
-    -DAG_UPDATER_NAME="${AG_UPDATER_NAME}"
-    -DAG_SERVER_URL="${AG_SERVER_URL}"
-    -DAG_SECRET="${AG_SECRET}"
+target_compile_definitions(ag-update-lib PRIVATE
+    AG_UPDATER_NAME="${AG_UPDATER_NAME}"
+    AG_SERVER_URL="${AG_SERVER_URL}"
+    AG_SECRET="${AG_SECRET}"
+    AG_SSL_VERIFY=$<IF:$<BOOL:${AG_SSL_VERIFY}>,1,0>
 )
 ```
+
+- `AG_SSL_VERIFY=OFF` 会调用 `cpp-httplib` 的 `enable_server_certificate_verification(false)`，允许连接自签名/无有效证书链的 HTTPS 服务器。首次关闭校验时以 WARN 级别记录一次"certificate verification is DISABLED"。**仅限开发/内网调试使用**，生产环境不得关闭。
 
 ### 4.2 数据结构
 
