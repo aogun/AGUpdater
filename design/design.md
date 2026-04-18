@@ -672,6 +672,7 @@ Windows 加载的 EXE/DLL 文件会被锁定，若 ag-updater 从目标目录运
 
 - 原地运行（未传 --target）时必须跳过自身文件名；分级运行时 target 中的同名文件不被占用，可直接覆盖
 - 文件占用时有限次重试，之后降级为"重命名为 `.old-<tick>` 再写入新文件"（即使 ag-manager 仍在运行，其 exe/DLL 也可顺利更新，新文件下次启动生效）
+- **.old-<tick> 备份清理**：ag-updater 在开始解压前和结束时各扫描一次 target 目录的 `*.old-*`，尝试删除；仍被占用的留给下一次启动清理。`ag_cleanup_temp()` 也会在调用方 exe_dir 下扫描 `*.old-*`（调用方上次实例已退出，文件多半已释放）
 - 每个文件解压都打印 `-> <path>` 和 `OK <path> (<bytes>)` 或 `FAIL <path>: <原因>`，方便 ag-manager 捕获并展示
 - stdout/stderr 在程序启动时设置为无缓冲（`setvbuf IONBF`），保证管道读取方实时看到输出
 - 暂存目录会残留在 `%TEMP%`，由操作系统定期清理

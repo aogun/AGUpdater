@@ -266,6 +266,39 @@ static bool extract_file(unzFile zf, const std::string &dest_path,
     return ok;
 }
 
+/* Remove stale .old-<tick> rename backups in dir. Backups created while a
+ * DLL was loaded cannot be deleted immediately — they pile up across updates.
+ * This sweep catches any backup whose owning process has since exited.
+ * Returns number of files successfully removed. */
+static int cleanup_old_backups(const std::string &dir)
+{
+    int removed = 0;
+#ifdef _WIN32
+    std::string pattern = dir + "\\*.old-*";
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        std::string path = dir + "\\" + fd.cFileName;
+        if (DeleteFileA(path.c_str())) {
+            LOG_INFO("cleanup: removed backup %s", path.c_str());
+            ++removed;
+        } else {
+            DWORD err = GetLastError();
+            /* ERROR_SHARING_VIOLATION / ERROR_ACCESS_DENIED means still locked;
+             * leave it for the next startup sweep. */
+            LOG_DEBUG("cleanup: backup still in use, skipping: %s (error=%lu)",
+                      path.c_str(), (unsigned long)err);
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    (void)dir;
+#endif
+    return removed;
+}
+
 static bool launch_program(const std::string &dir, const std::string &program)
 {
 #ifdef _WIN32
@@ -338,6 +371,14 @@ int main(int argc, char *argv[])
     std::string target_dir = target_override.empty()
         ? get_exe_dir(argv[0]) : target_override;
     std::string self_name = get_exe_name();
+
+    /* Sweep backups left over from previous updates (when the owning
+     * process kept the DLL loaded); any now-unlocked ones are deleted. */
+    int pre_cleaned = cleanup_old_backups(target_dir);
+    if (pre_cleaned > 0) {
+        LOG_INFO("Pre-update backup cleanup: removed %d stale file(s)",
+                 pre_cleaned);
+    }
 
     LOG_DEBUG("ZIP: %s", zip_path.c_str());
     LOG_DEBUG("Target: %s", target_dir.c_str());
@@ -452,6 +493,14 @@ int main(int argc, char *argv[])
     /* Delete temporary zip file */
     if (remove(zip_path.c_str()) == 0) {
         LOG_INFO("Deleted: %s", zip_path.c_str());
+    }
+
+    /* Sweep .old-* backups once more — any that became free during extraction
+     * (e.g. renamed files the OS released) get cleaned up now. */
+    int post_cleaned = cleanup_old_backups(target_dir);
+    if (post_cleaned > 0) {
+        LOG_INFO("Post-update backup cleanup: removed %d stale file(s)",
+                 post_cleaned);
     }
 
     /* Launch specified program after update */

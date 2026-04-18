@@ -134,6 +134,30 @@ static std::string get_app_temp_dir()
 }
 
 #ifdef _WIN32
+/* Best-effort removal of .old-<tick> rename backups left in dir.
+ * Files still locked are skipped and left for a future sweep. */
+static int cleanup_old_backups(const std::string &dir)
+{
+    int removed = 0;
+    std::string pattern = dir + "\\*.old-*";
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        std::string path = dir + "\\" + fd.cFileName;
+        if (DeleteFileA(path.c_str())) {
+            LOG_INFO("cleanup: removed backup %s", path.c_str());
+            ++removed;
+        } else {
+            LOG_DEBUG("cleanup: backup still in use: %s (error=%lu)",
+                      path.c_str(), (unsigned long)GetLastError());
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return removed;
+}
+
 /* Recursively delete dir and its contents. Logs per-entry action. */
 static void remove_dir_recursive(const std::string &path,
                                   int &files_removed, int &dirs_removed)
@@ -755,5 +779,18 @@ ag_error_t ag_cleanup_temp(void)
 
     LOG_INFO("cleanup: done for %s — removed %d file(s), %d dir(s)",
              dir_noslash.c_str(), files_removed, dirs_removed);
+
+#ifdef _WIN32
+    /* Also sweep stale .old-<tick> rename backups next to the caller's exe.
+     * These accumulate when a previous run could not delete a still-loaded
+     * DLL; by now the prior process has exited and the file is free. */
+    std::string exe_dir = get_exe_dir();
+    int backup_removed = cleanup_old_backups(exe_dir);
+    if (backup_removed > 0) {
+        LOG_INFO("cleanup: removed %d stale backup file(s) in %s",
+                 backup_removed, exe_dir.c_str());
+    }
+#endif
+
     return AG_OK;
 }
