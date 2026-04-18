@@ -245,12 +245,16 @@
         const data = (typeof msg === 'string') ? encoder.encode(msg) : new Uint8Array(msg);
         const len = data.length;
         const bitLen = len * 8;
-        const padLen = (len % 64 < 56) ? 56 - (len % 64) : 120 - (len % 64);
+        /* Padding: after L bytes + 0x80, need zeros so (L+1+K) ≡ 56 (mod 64),
+         * then 8-byte length → total ≡ 0 (mod 64). */
+        const padLen = (len % 64 < 56) ? 55 - (len % 64) : 119 - (len % 64);
         const buf = new Uint8Array(len + 1 + padLen + 8);
         buf.set(data);
         buf[len] = 0x80;
         const dv = new DataView(buf.buffer);
-        dv.setUint32(buf.length - 4, bitLen, false);
+        /* 64-bit length as two 32-bit words (big-endian): high then low. */
+        dv.setUint32(buf.length - 8, Math.floor(bitLen / 0x100000000), false);
+        dv.setUint32(buf.length - 4, bitLen >>> 0, false);
         let h0=0x6a09e667,h1=0xbb67ae85,h2=0x3c6ef372,h3=0xa54ff53a,h4=0x510e527f,h5=0x9b05688c,h6=0x1f83d9ab,h7=0x5be0cd19;
         const w = new Uint32Array(64);
         for (let off = 0; off < buf.length; off += 64) {
