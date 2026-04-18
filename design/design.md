@@ -68,6 +68,8 @@ AGUpdater 是一个自动更新系统，由以下组件构成：
 ```
 ag-server [config_path]     # 启动服务器，默认读取 config.json
 ag-server -p <password>     # 工具模式：生成 password_hash 值
+ag-server -l <level>        # 设置日志级别（error/warn/info/debug/trace）
+ag-server -h                # 显示帮助信息
 ```
 
 使用 `-p` 参数可生成 `admin.password_hash` 字段所需的值：
@@ -76,6 +78,8 @@ ag-server -p <password>     # 工具模式：生成 password_hash 值
 $ ag-server -p admin123
 password_hash: 240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9
 ```
+
+> 所有三个组件（ag-server / ag-manager / ag-updater）均支持 `-l <level>` 参数设置日志级别。
 
 **配置文件格式：**
 
@@ -373,7 +377,7 @@ CREATE INDEX IF NOT EXISTS idx_download_logs_version ON download_logs(version_id
 
 #### 3.3.3 客户端接口（HMAC 校验）
 
-所有客户端接口请求须携带 `X-Auth` 请求头，内容为身份校验 JSON 字符串（参见第 7 节）。
+所有客户端接口请求须携带 `X-Auth` 请求头，内容为身份校验 JSON 字符串（参见第 7 节）。已登录的管理员也可使用 `Authorization: Bearer <token>` 头直接调用客户端接口，跳过 HMAC 校验。
 
 **GET /api/v1/client/updates?current_version=1.0.0** — 检查更新
 
@@ -436,15 +440,22 @@ CREATE INDEX IF NOT EXISTS idx_download_logs_version ON download_logs(version_id
 
 ### 3.4 Web 管理前端
 
-使用 Vue3 单页应用，通过服务器静态文件托管。
+使用 Vue3 单页应用（CDN 引入，无需 Node.js 构建），通过服务器静态文件托管。
+
+> 登录认证中使用的 SHA-256 和 HMAC-SHA256 优先使用 Web Crypto API（`crypto.subtle`），在 HTTP 非安全上下文（如 NAT 映射的外网 HTTP 访问）下自动降级为纯 JS 实现。
 
 **页面结构：**
 
 | 页面 | 路径 | 功能 |
 |------|------|------|
 | 登录页 | /login | 用户名密码登录（前端实现 challenge-response 签名流程） |
-| 版本管理 | /versions | 版本列表、上传、删除、编辑 |
+| 版本管理 | /versions | 版本列表（按版本号降序排列）、上传、删除、编辑 |
 | 下载统计 | /versions/:id/stats | 查看某版本的下载记录 |
+
+**上传功能特性：**
+- 支持点击选择或拖拽 ZIP 文件上传
+- 从文件名自动提取版本号（匹配 `xxx-1.2.3.zip` 或 `xxx_1.2.3.zip` 格式）
+- 上传进度条实时显示
 
 ---
 
@@ -813,6 +824,12 @@ AGUpdater/
 │           ├── http_client.h/cpp  # HTTP(S) 请求
 │           ├── auth.h/cpp      # HMAC 校验生成
 │           └── version_util.h/cpp
+├── src/                        # 共享源文件
+│   ├── version.h               # 版本号定义
+│   ├── log.h                   # 日志系统头文件
+│   └── log.cpp                 # 日志系统实现
+├── data/
+│   └── config.json             # 服务器示例配置文件
 └── third_party/                # 第三方依赖
     ├── sqlite3/
     ├── cpp-httplib/            # HTTP(S) 服务器/客户端
@@ -912,3 +929,50 @@ int main() {
     // ... 程序继续运行
 }
 ```
+
+---
+
+## 12. 日志系统
+
+所有组件使用统一的轻量级日志系统（`src/log.h` / `src/log.cpp`），零外部依赖。
+
+**日志级别：**
+
+| 级别 | 值 | 输出目标 | 用途 |
+|------|-----|---------|------|
+| ERROR | 0 | stderr | 严重错误 |
+| WARN | 1 | stderr | 警告 |
+| INFO | 2 | stdout | 正常运行信息（默认级别） |
+| DEBUG | 3 | stdout | 调试信息，含请求/响应详情 |
+| TRACE | 4 | stdout | 详细跟踪 |
+
+**日志格式：** `[LEVEL] [HH:MM:SS.mmm] [file:line] message`
+
+**特性：**
+- 同时输出到控制台和日志文件（可选）
+- 运行时可通过 `-l <level>` 参数设置级别
+- 跨平台：Windows 使用 `GetLocalTime`，Linux 使用 `gettimeofday`
+- 各组件的日志文件：`ag-server.log`、`ag-manager.log`、`ag-updater.log`
+
+---
+
+## 13. 构建与打包
+
+### 13.1 MinGW 运行时 DLL 自动收集
+
+Windows MinGW 编译时，CMake 自动查找并拷贝以下 DLL 到各可执行文件输出目录：
+- `libwinpthread-1.dll`、`libgcc_s_seh-1.dll`、`libstdc++-6.dll`（MinGW 运行时）
+- `libssl-3-x64.dll`、`libcrypto-3-x64.dll`（OpenSSL）
+- `zlib1.dll`（zlib）
+
+### 13.2 ag-server-pack 打包
+
+```bash
+cmake --build build --target ag-server-pack
+```
+
+生成 `ag-server-<version>.zip`，包含：
+- `ag-server.exe` — 服务器可执行文件
+- `web/` — Vue3 前端资源
+- `config.json` — 示例配置文件（来自 `data/config.json`）
+- MinGW 运行时 DLL（Windows 平台）
