@@ -271,24 +271,30 @@ int main(int argc, char *argv[])
     LOG_INFO("ag-updater v%s", APP_VERSION_STRING);
 
     if (argc < 2) {
-        LOG_ERROR("Usage: ag-updater <zip_path> [--launch <program>] [-l <level>]");
+        LOG_ERROR("Usage: ag-updater <zip_path> [--target <dir>] [--launch <program>] [-l <level>]");
         return 1;
     }
 
     std::string zip_path = argv[1];
     std::string launch_app;
+    std::string target_override;
 
     /* Parse optional arguments */
     for (int i = 2; i < argc; ++i) {
         if (std::string(argv[i]) == "--launch" && i + 1 < argc) {
             launch_app = argv[++i];
+        } else if (std::string(argv[i]) == "--target" && i + 1 < argc) {
+            target_override = argv[++i];
         } else if (std::string(argv[i]) == "-l" && i + 1 < argc) {
             g_log_level = log_level_from_name(argv[++i]);
         }
     }
     LOG_INFO("Log level: %s", log_level_name(g_log_level));
 
-    std::string target_dir = get_exe_dir(argv[0]);
+    /* Target dir: --target overrides own exe dir. Needed when updater runs
+     * from a staging temp dir (to avoid locking target-dir DLLs). */
+    std::string target_dir = target_override.empty()
+        ? get_exe_dir(argv[0]) : target_override;
     std::string self_name = get_exe_name();
 
     LOG_DEBUG("ZIP: %s", zip_path.c_str());
@@ -358,16 +364,20 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        /* Skip self (ag-updater.exe) */
-        std::string base_name = rel_path;
-        size_t last_sep = rel_path.find_last_of("/\\");
-        if (last_sep != std::string::npos) {
-            base_name = rel_path.substr(last_sep + 1);
-        }
-        if (base_name == self_name) {
-            LOG_INFO("Skip self: %s", rel_path.c_str());
-            ++skipped;
-            continue;
+        /* Skip self (ag-updater.exe) only when extracting in-place.
+         * With --target the running updater is in a separate staging dir,
+         * so the target's ag-updater.exe is not locked and CAN be replaced. */
+        if (target_override.empty()) {
+            std::string base_name = rel_path;
+            size_t last_sep = rel_path.find_last_of("/\\");
+            if (last_sep != std::string::npos) {
+                base_name = rel_path.substr(last_sep + 1);
+            }
+            if (base_name == self_name) {
+                LOG_INFO("Skip self: %s", rel_path.c_str());
+                ++skipped;
+                continue;
+            }
         }
 
         /* Build destination path */

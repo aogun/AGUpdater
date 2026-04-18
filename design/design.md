@@ -636,37 +636,43 @@ ag_error_t ag_apply_update(
 ### 5.2 命令行参数
 
 ```
-ag-updater <zip_path> [--launch <program>]
+ag-updater <zip_path> [--target <dir>] [--launch <program>] [-l <level>]
 ```
 
 | 参数 | 说明 |
 |------|------|
 | zip_path | zip 压缩包文件路径（位置参数） |
+| --target | 可选，覆盖目标目录；省略时使用 ag-updater 自身所在目录 |
 | --launch | 可选，更新完成后启动指定程序名 |
-
-目标安装目录固定为 ag-updater 可执行文件自身所在的目录，无需额外指定。
+| -l | 可选，日志级别 |
 
 ### 5.3 执行流程
 
 ```
-1. 解析命令行参数，获取 zip 文件路径和可选的 launch 程序名
-2. 获取 ag-updater 自身所在目录作为 target_dir
+1. 解析命令行参数
+2. 确定 target_dir（--target 覆盖；否则使用自身所在目录）
 3. 验证 zip 文件存在且可读
-4. 打开 zip 文件，定位第一个目录（zip 根目录下的首个子目录）
+4. 打开 zip 文件，定位 zip 根目录下的首个子目录
 5. 将该目录下的所有文件解压到 target_dir：
-   a. 跳过更新程序自身（ag-updater.exe）
-   b. 覆盖已有文件
+   a. 原地更新（未传 --target）时跳过自身文件名
+   b. 覆盖已有文件（遇到文件占用时最多重试 2 次、每次间隔 1 秒）
    c. 保持目录结构
 6. 删除临时 zip 文件
-7. 若指定了 --launch 且更新无错误，启动指定程序
-8. 退出，返回 0 表示成功，非 0 表示失败
+7. 若指定了 --launch 且无错误，启动指定程序
+8. 退出：0 成功，非 0 失败
 ```
 
-### 5.4 注意事项
+### 5.4 DLL 占用问题与分级运行
 
-- 更新程序不能覆盖自身，需跳过自身文件名
-- 需要处理文件被占用的情况（等待重试或提示用户关闭相关程序）
-- 解压过程中若失败，应尽量保证原文件不被破坏（可先解压到临时目录再整体移动）
+Windows 加载的 EXE/DLL 文件会被锁定，若 ag-updater 从目标目录运行，则其依赖的 MinGW/OpenSSL DLL 被操作系统占用，无法被新版 zip 覆盖（报错 `File locked`）。
+
+**解决方案**：由 `ag_apply_update` 将 `ag-updater.exe` 及同目录的所有 `*.dll` 复制到 `%TEMP%\ag-updater-stage-<pid>-<tick>\`，再从该暂存目录启动 ag-updater，并传 `--target <原目录>`。暂存目录里的 DLL 被锁定，与原目录无关，因此 ag-updater 可以自由覆盖原目录中的同名 DLL。
+
+### 5.5 注意事项
+
+- 原地运行（未传 --target）时必须跳过自身文件名；分级运行时 target 中的同名文件不被占用，可直接覆盖
+- 文件占用时有限次重试，足以等待调用方（如 ag-manager）的进程完全退出
+- 暂存目录会残留在 `%TEMP%`，由操作系统定期清理
 
 ---
 

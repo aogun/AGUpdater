@@ -308,6 +308,76 @@ ag_error_t ag_download_update(
 
 /* ---- ag_apply_update ---- */
 
+#ifdef _WIN32
+/* Stage ag-updater.exe + all *.dll from src_dir into a fresh temp dir.
+ * Running updater from the staging dir prevents Windows from locking the
+ * DLLs in the target directory, so the update can overwrite them. */
+static std::string stage_updater_files(const std::string &src_dir)
+{
+    char tmp[MAX_PATH];
+    DWORD tlen = GetTempPathA(MAX_PATH, tmp);
+    if (tlen == 0 || tlen >= MAX_PATH) {
+        LOG_ERROR("ag_apply_update: GetTempPathA failed");
+        return std::string();
+    }
+
+    char staging[MAX_PATH];
+    snprintf(staging, MAX_PATH, "%sag-updater-stage-%lu-%lu",
+             tmp, GetCurrentProcessId(), GetTickCount());
+    if (!CreateDirectoryA(staging, NULL) &&
+        GetLastError() != ERROR_ALREADY_EXISTS) {
+        LOG_ERROR("ag_apply_update: cannot create staging dir %s (error=%lu)",
+                  staging, GetLastError());
+        return std::string();
+    }
+    std::string staging_dir(staging);
+    LOG_DEBUG("ag_apply_update: staging dir %s", staging_dir.c_str());
+
+    /* Copy ag-updater.exe */
+    std::string updater_src = src_dir + "\\" + AG_UPDATER_NAME + ".exe";
+    std::string updater_dst = staging_dir + "\\" + AG_UPDATER_NAME + ".exe";
+    if (!CopyFileA(updater_src.c_str(), updater_dst.c_str(), FALSE)) {
+        LOG_ERROR("ag_apply_update: CopyFileA %s -> %s failed (error=%lu)",
+                  updater_src.c_str(), updater_dst.c_str(), GetLastError());
+        return std::string();
+    }
+
+    /* Copy every *.dll next to the updater so it can load its dependencies
+     * from staging instead of from the target directory being overwritten. */
+    std::string pattern = src_dir + "\\*.dll";
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            std::string dll_src = src_dir + "\\" + fd.cFileName;
+            std::string dll_dst = staging_dir + "\\" + fd.cFileName;
+            if (!CopyFileA(dll_src.c_str(), dll_dst.c_str(), FALSE)) {
+                LOG_WARN("ag_apply_update: copy DLL %s failed (error=%lu)",
+                         fd.cFileName, GetLastError());
+            } else {
+                LOG_TRACE("ag_apply_update: staged %s", fd.cFileName);
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+
+    return staging_dir;
+}
+
+/* Quote argument for Windows command line (simple: wrap in quotes, escape \"). */
+static std::string win_quote(const std::string &s)
+{
+    std::string out = "\"";
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '"') out += '\\';
+        out += s[i];
+    }
+    out += "\"";
+    return out;
+}
+#endif
+
 ag_error_t ag_apply_update(const char *zip_path, const char *launch_after)
 {
     if (!zip_path || !zip_path[0]) {
@@ -320,28 +390,32 @@ ag_error_t ag_apply_update(const char *zip_path, const char *launch_after)
         LOG_INFO("ag_apply_update: will launch '%s' after update", launch_after);
     }
 
-    /* Find ag-updater executable in same directory as current exe */
     std::string exe_dir = get_exe_dir();
 
 #ifdef _WIN32
-    std::string updater_path = exe_dir + "\\" + AG_UPDATER_NAME + ".exe";
-#else
-    std::string updater_path = exe_dir + "/" + AG_UPDATER_NAME;
-#endif
-
-    /* Check updater exists */
-#ifdef _WIN32
-    if (GetFileAttributesA(updater_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        LOG_ERROR("ag_apply_update: updater not found: %s", updater_path.c_str());
+    std::string original_updater = exe_dir + "\\" + AG_UPDATER_NAME + ".exe";
+    if (GetFileAttributesA(original_updater.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        LOG_ERROR("ag_apply_update: updater not found: %s", original_updater.c_str());
         return AG_ERR_NOT_FOUND;
     }
 
-    /* Build command line */
-    std::string cmd_args = "\"" + updater_path + "\" \"" +
-                           std::string(zip_path) + "\"";
-    if (launch_after && launch_after[0]) {
-        cmd_args += " --launch \"" + std::string(launch_after) + "\"";
+    /* Stage updater + DLLs to temp so extraction into exe_dir can overwrite
+     * libwinpthread-1.dll etc. without "File locked" errors. */
+    std::string staging_dir = stage_updater_files(exe_dir);
+    if (staging_dir.empty()) {
+        LOG_ERROR("ag_apply_update: failed to stage updater files");
+        return AG_ERR_IO;
     }
+    std::string staged_updater = staging_dir + "\\" + AG_UPDATER_NAME + ".exe";
+
+    /* Build command line: staged updater extracts into original exe_dir. */
+    std::string cmd_args = win_quote(staged_updater) + " " +
+                           win_quote(zip_path) + " --target " +
+                           win_quote(exe_dir);
+    if (launch_after && launch_after[0]) {
+        cmd_args += " --launch " + win_quote(launch_after);
+    }
+    LOG_DEBUG("ag_apply_update: cmd=%s", cmd_args.c_str());
 
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -349,23 +423,24 @@ ag_error_t ag_apply_update(const char *zip_path, const char *launch_after)
     si.cb = sizeof(si);
     memset(&pi, 0, sizeof(pi));
 
-    if (!CreateProcessA(updater_path.c_str(), &cmd_args[0],
+    if (!CreateProcessA(staged_updater.c_str(), &cmd_args[0],
                         NULL, NULL, FALSE,
-                        0, NULL, NULL, &si, &pi)) {
+                        0, NULL, staging_dir.c_str(), &si, &pi)) {
         LOG_ERROR("ag_apply_update: CreateProcessA failed (error=%lu)", GetLastError());
         return AG_ERR_IO;
     }
 
-    LOG_INFO("ag_apply_update: updater process launched (pid=%lu)", pi.dwProcessId);
+    LOG_INFO("ag_apply_update: staged updater launched (pid=%lu) from %s",
+             pi.dwProcessId, staging_dir.c_str());
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 #else
+    std::string updater_path = exe_dir + "/" + AG_UPDATER_NAME;
     if (access(updater_path.c_str(), X_OK) != 0) {
         LOG_ERROR("ag_apply_update: updater not found or not executable: %s", updater_path.c_str());
         return AG_ERR_NOT_FOUND;
     }
 
-    /* Fork and exec */
     pid_t pid = fork();
     if (pid < 0) {
         LOG_ERROR("ag_apply_update: fork() failed");
