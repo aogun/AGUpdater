@@ -685,6 +685,20 @@ Windows 加载的 EXE/DLL 文件会被锁定，若 ag-updater 从目标目录运
 - 子进程退出后调用 `done_cb(exit_code, ud)`
 - ag-manager 用此接口将日志流式追加到界面
 
+### 5.7 临时文件布局与清理
+
+所有下载文件与暂存目录统一存放在：
+
+```
+%TEMP%\ag-updater-<md5(exe_dir)>\
+├── <version>.zip          ← 下载的升级包
+└── stage-<pid>-<tick>\    ← 分级运行时复制的 ag-updater.exe + DLL
+```
+
+- `exe_dir` 先做小写化、斜杠归一、去尾分隔符再计算 MD5，避免同一安装目录的大小写差异命中不同子目录
+- 不同安装路径的客户端各自拥有独立的子目录，互不干扰
+- `ag-update-lib` 暴露 `ag_cleanup_temp()`：集成方（如 ag-manager 或任何被升级的程序）在启动时调用即可清理本安装对应的全部遗留文件；每个删除动作以 INFO 级别日志打印（目录名、文件名、行为、统计）
+
 ---
 
 ## 6. 版本管理工具设计 (ag-manager)

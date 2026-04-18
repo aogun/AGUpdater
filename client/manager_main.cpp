@@ -213,6 +213,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     log_init_file("ag-manager.log");
     LOG_INFO("ag-manager v%s starting", APP_VERSION_STRING);
     LOG_INFO("Log level: %s", log_level_name(g_log_level));
+
+    /* Remove leftover downloads and staging dirs from previous update runs. */
+    ag_cleanup_temp();
+
     g_hinst = hInstance;
 
     /* Init common controls for ListView and ProgressBar */

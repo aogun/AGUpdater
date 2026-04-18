@@ -95,6 +95,18 @@ ag_error_t ag_apply_update_with_log(
     void *user_data
 );
 
+/**
+ * Remove leftover downloads and staging dirs for the current installation.
+ *
+ * Files are kept under a per-install subdirectory of the system temp folder,
+ * named `ag-updater-<md5(exe_dir)>`, so different install paths do not share
+ * temp space. Applications integrating ag-update-lib should call this at
+ * startup (e.g. from main()) to prevent accumulation across updates.
+ *
+ * Actions and paths are logged at INFO level.
+ */
+ag_error_t ag_cleanup_temp(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -5,6 +5,7 @@
 #include "log.h"
 #include "cJSON.h"
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -20,6 +21,8 @@
 #else
 #include <unistd.h>
 #include <libgen.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #endif
 
 #ifndef AG_UPDATER_NAME
@@ -33,19 +36,19 @@ static void safe_strncpy(char *dst, const char *src, size_t dst_size)
     dst[dst_size - 1] = '\0';
 }
 
-static std::string get_temp_dir()
+static std::string get_system_temp_dir()
 {
 #ifdef _WIN32
     char buf[MAX_PATH];
     DWORD len = GetTempPathA(MAX_PATH, buf);
     if (len > 0 && len < MAX_PATH) {
-        return std::string(buf, len);
+        return std::string(buf, len);   /* includes trailing backslash */
     }
-    return std::string(".");
+    return std::string(".\\");
 #else
     const char *tmp = getenv("TMPDIR");
-    if (tmp && tmp[0]) return std::string(tmp);
-    return std::string("/tmp");
+    if (tmp && tmp[0]) return std::string(tmp) + "/";
+    return std::string("/tmp/");
 #endif
 }
 
@@ -68,6 +71,108 @@ static std::string get_exe_dir()
     return std::string(path);
 #endif
 }
+
+static std::string md5_hex(const std::string &input)
+{
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_md5(), NULL);
+    EVP_DigestUpdate(ctx, input.data(), input.size());
+    unsigned char h[EVP_MAX_MD_SIZE];
+    unsigned int hlen = 0;
+    EVP_DigestFinal_ex(ctx, h, &hlen);
+    EVP_MD_CTX_free(ctx);
+    char hex[EVP_MAX_MD_SIZE * 2 + 1];
+    for (unsigned int i = 0; i < hlen; ++i) {
+        snprintf(hex + i * 2, 3, "%02x", h[i]);
+    }
+    return std::string(hex, hlen * 2);
+}
+
+/* Normalize exe dir path for MD5 hashing: lowercase + unified separators +
+ * no trailing separator. Same install dir in different cases must hash the
+ * same so cleanup targets the correct subdir. */
+static std::string normalize_path_for_hash(const std::string &dir)
+{
+    std::string s = dir;
+#ifdef _WIN32
+    for (size_t i = 0; i < s.size(); ++i) {
+        s[i] = (char)tolower((unsigned char)s[i]);
+        if (s[i] == '/') s[i] = '\\';
+    }
+    while (s.size() > 1 &&
+           (s.back() == '\\' || s.back() == '/')) s.pop_back();
+#else
+    while (s.size() > 1 && s.back() == '/') s.pop_back();
+#endif
+    return s;
+}
+
+/* Returns %TEMP%\ag-updater-<md5>\  (trailing separator included).
+ * The directory is created if missing. Empty string on failure. */
+static std::string get_app_temp_dir()
+{
+    std::string exe_dir = get_exe_dir();
+    std::string hash = md5_hex(normalize_path_for_hash(exe_dir));
+    std::string dir = get_system_temp_dir() + "ag-updater-" + hash;
+
+#ifdef _WIN32
+    if (!CreateDirectoryA(dir.c_str(), NULL) &&
+        GetLastError() != ERROR_ALREADY_EXISTS) {
+        LOG_ERROR("get_app_temp_dir: CreateDirectoryA(%s) failed (error=%lu)",
+                  dir.c_str(), (unsigned long)GetLastError());
+        return std::string();
+    }
+    return dir + "\\";
+#else
+    if (mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST) {
+        LOG_ERROR("get_app_temp_dir: mkdir(%s) failed: %s",
+                  dir.c_str(), strerror(errno));
+        return std::string();
+    }
+    return dir + "/";
+#endif
+}
+
+#ifdef _WIN32
+/* Recursively delete dir and its contents. Logs per-entry action. */
+static void remove_dir_recursive(const std::string &path,
+                                  int &files_removed, int &dirs_removed)
+{
+    std::string pattern = path + "\\*";
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            std::string name = fd.cFileName;
+            if (name == "." || name == "..") continue;
+            std::string child = path + "\\" + name;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                remove_dir_recursive(child, files_removed, dirs_removed);
+            } else {
+                if (!DeleteFileA(child.c_str())) {
+                    SetFileAttributesA(child.c_str(), FILE_ATTRIBUTE_NORMAL);
+                    if (!DeleteFileA(child.c_str())) {
+                        LOG_WARN("cleanup: cannot remove file %s (error=%lu)",
+                                 child.c_str(),
+                                 (unsigned long)GetLastError());
+                        continue;
+                    }
+                }
+                LOG_INFO("cleanup: removed file %s", child.c_str());
+                ++files_removed;
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    if (RemoveDirectoryA(path.c_str())) {
+        LOG_INFO("cleanup: removed dir  %s", path.c_str());
+        ++dirs_removed;
+    } else {
+        LOG_WARN("cleanup: cannot remove dir %s (error=%lu)",
+                 path.c_str(), (unsigned long)GetLastError());
+    }
+}
+#endif
 
 /* ---- ag_check_update ---- */
 
@@ -218,9 +323,11 @@ ag_error_t ag_download_update(
     ag_version_info_t info_copy = *info;
 
     std::thread t([info_copy, callback, user_data]() {
-        /* Build temp file path */
-        std::string temp_dir = get_temp_dir();
-        std::string file_path = temp_dir + "/" +
+        /* Build temp file path inside the per-install temp dir so different
+         * installations do not share download artifacts. */
+        std::string temp_dir = get_app_temp_dir();
+        if (temp_dir.empty()) temp_dir = get_system_temp_dir();
+        std::string file_path = temp_dir +
                                  std::string(info_copy.version) + ".zip";
 
         /* Download */
@@ -314,20 +421,22 @@ ag_error_t ag_download_update(
  * DLLs in the target directory, so the update can overwrite them. */
 static std::string stage_updater_files(const std::string &src_dir)
 {
-    char tmp[MAX_PATH];
-    DWORD tlen = GetTempPathA(MAX_PATH, tmp);
-    if (tlen == 0 || tlen >= MAX_PATH) {
-        LOG_ERROR("ag_apply_update: GetTempPathA failed");
+    /* Put staging under the per-install temp dir so it's included in cleanup
+     * and is co-located with the downloaded zip. */
+    std::string app_tmp = get_app_temp_dir();
+    if (app_tmp.empty()) {
+        LOG_ERROR("ag_apply_update: cannot resolve app temp dir");
         return std::string();
     }
 
     char staging[MAX_PATH];
-    snprintf(staging, MAX_PATH, "%sag-updater-stage-%lu-%lu",
-             tmp, GetCurrentProcessId(), GetTickCount());
+    snprintf(staging, MAX_PATH, "%sstage-%lu-%lu",
+             app_tmp.c_str(), (unsigned long)GetCurrentProcessId(),
+             (unsigned long)GetTickCount());
     if (!CreateDirectoryA(staging, NULL) &&
         GetLastError() != ERROR_ALREADY_EXISTS) {
         LOG_ERROR("ag_apply_update: cannot create staging dir %s (error=%lu)",
-                  staging, GetLastError());
+                  staging, (unsigned long)GetLastError());
         return std::string();
     }
     std::string staging_dir(staging);
@@ -583,4 +692,68 @@ ag_error_t ag_apply_update_with_log(const char *zip_path,
     LOG_ERROR("ag_apply_update_with_log: not implemented on this platform");
     return AG_ERR_INTERNAL;
 #endif
+}
+
+ag_error_t ag_cleanup_temp(void)
+{
+    std::string dir = get_app_temp_dir();
+    if (dir.empty()) return AG_ERR_IO;
+    /* Strip trailing separator for cleaner log output. */
+    std::string dir_noslash = dir;
+    while (!dir_noslash.empty() &&
+           (dir_noslash.back() == '\\' || dir_noslash.back() == '/')) {
+        dir_noslash.pop_back();
+    }
+    LOG_INFO("cleanup: scanning %s", dir_noslash.c_str());
+
+    int files_removed = 0, dirs_removed = 0;
+
+#ifdef _WIN32
+    std::string pattern = dir_noslash + "\\*";
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        LOG_INFO("cleanup: nothing to remove in %s", dir_noslash.c_str());
+        return AG_OK;
+    }
+    do {
+        std::string name = fd.cFileName;
+        if (name == "." || name == "..") continue;
+        std::string child = dir_noslash + "\\" + name;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            remove_dir_recursive(child, files_removed, dirs_removed);
+        } else {
+            if (!DeleteFileA(child.c_str())) {
+                SetFileAttributesA(child.c_str(), FILE_ATTRIBUTE_NORMAL);
+                if (!DeleteFileA(child.c_str())) {
+                    LOG_WARN("cleanup: cannot remove file %s (error=%lu)",
+                             child.c_str(),
+                             (unsigned long)GetLastError());
+                    continue;
+                }
+            }
+            LOG_INFO("cleanup: removed file %s", child.c_str());
+            ++files_removed;
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR *d = opendir(dir_noslash.c_str());
+    if (!d) return AG_OK;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        std::string name = de->d_name;
+        if (name == "." || name == "..") continue;
+        std::string child = dir_noslash + "/" + name;
+        if (unlink(child.c_str()) == 0) {
+            LOG_INFO("cleanup: removed %s", child.c_str());
+            ++files_removed;
+        }
+    }
+    closedir(d);
+#endif
+
+    LOG_INFO("cleanup: done for %s — removed %d file(s), %d dir(s)",
+             dir_noslash.c_str(), files_removed, dirs_removed);
+    return AG_OK;
 }
