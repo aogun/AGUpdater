@@ -238,8 +238,23 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     case WM_CHECK_ERROR: {
-        LOG_ERROR("Failed to check for updates");
-        SetWindowTextW(g_detail, L"Failed to check for updates.");
+        int err = (int)wParam;
+        const wchar_t *reason;
+        switch ((ag_error_t)err) {
+        case AG_ERR_NETWORK:  reason = L"network error"; break;
+        case AG_ERR_AUTH:     reason = L"authentication failed"; break;
+        case AG_ERR_CHECKSUM: reason = L"checksum mismatch"; break;
+        case AG_ERR_IO:       reason = L"I/O error"; break;
+        case AG_ERR_NOT_FOUND:reason = L"not found"; break;
+        case AG_ERR_INTERNAL: reason = L"internal error"; break;
+        default:              reason = L"unknown error"; break;
+        }
+        LOG_ERROR("Failed to check for updates (error=%d). See earlier log for details.", err);
+        wchar_t buf[256];
+        _snwprintf(buf, 256,
+            L"Failed to check for updates: %ls (error=%d).\r\nSee log for details.",
+            reason, err);
+        SetWindowTextW(g_detail, buf);
         break;
     }
 

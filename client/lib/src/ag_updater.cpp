@@ -98,7 +98,7 @@ ag_error_t ag_check_update(
         HttpResult res = http_get(path);
 
         if (!res.ok) {
-            LOG_ERROR("ag_check_update: network error: %s", res.error.c_str());
+            LOG_ERROR("ag_check_update failed: %s", res.error.c_str());
             callback(AG_ERR_NETWORK, NULL, 0, user_data);
             return;
         }

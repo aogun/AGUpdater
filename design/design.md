@@ -954,6 +954,16 @@ int main() {
 - 跨平台：Windows 使用 `GetLocalTime`，Linux 使用 `gettimeofday`
 - 各组件的日志文件：`ag-server.log`、`ag-manager.log`、`ag-updater.log`
 
+**网络错误日志：**
+
+HTTP 客户端的错误信息包含完整服务器端点（scheme://host:port）、请求路径和 cpp-httplib 错误原因（Connection/ConnectionTimeout/SSLConnection 等），便于定位问题：
+
+```
+[WARN] [..] [http_client.cpp:..] http_get: cannot reach https://example.com:8443/api/v1/client/updates (Connection)
+```
+
+`ag-manager` 在弹出"Failed to check for updates"提示时，同时显示错误原因与错误码，并提示用户查看日志。
+
 ---
 
 ## 13. 构建与打包
