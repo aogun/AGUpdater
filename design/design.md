@@ -671,8 +671,19 @@ Windows 加载的 EXE/DLL 文件会被锁定，若 ag-updater 从目标目录运
 ### 5.5 注意事项
 
 - 原地运行（未传 --target）时必须跳过自身文件名；分级运行时 target 中的同名文件不被占用，可直接覆盖
-- 文件占用时有限次重试，足以等待调用方（如 ag-manager）的进程完全退出
+- 文件占用时有限次重试，之后降级为"重命名为 `.old-<tick>` 再写入新文件"（即使 ag-manager 仍在运行，其 exe/DLL 也可顺利更新，新文件下次启动生效）
+- 每个文件解压都打印 `-> <path>` 和 `OK <path> (<bytes>)` 或 `FAIL <path>: <原因>`，方便 ag-manager 捕获并展示
+- stdout/stderr 在程序启动时设置为无缓冲（`setvbuf IONBF`），保证管道读取方实时看到输出
 - 暂存目录会残留在 `%TEMP%`，由操作系统定期清理
+
+### 5.6 pipe 捕获接口
+
+`ag-update-lib` 提供 `ag_apply_update_with_log(zip, launch, log_cb, done_cb, ud)`：
+
+- 在暂存目录启动 ag-updater 的同时，通过匿名管道捕获其 stdout/stderr
+- 工作线程逐行调用 `log_cb(line, ud)`
+- 子进程退出后调用 `done_cb(exit_code, ud)`
+- ag-manager 用此接口将日志流式追加到界面
 
 ---
 
@@ -716,7 +727,9 @@ GUI 工具，使用 Win32 API 构建原生 Windows 界面，提供界面供用�
 2. 用户点击"下载"按钮，调用 `ag_download_update` 开始下载
 3. 下载过程中显示进度条，每秒更新
 4. 下载完成后提示用户是否立即安装
-5. 用户确认安装后调用 `ag_apply_update` 启动更新程序
+5. 用户确认安装后调用 `ag_apply_update_with_log` 启动更新程序，并捕获 ag-updater 的 stdout/stderr
+6. 更新期间 ag-manager **不再退出**，将 ag-updater 的每行输出追加到详情面板（readonly multiline EDIT）
+7. ag-updater 进程退出后显示 `--- Update complete ---` 或 `--- Update failed (exit code N) ---`
 
 ### 6.4 列表排序
 

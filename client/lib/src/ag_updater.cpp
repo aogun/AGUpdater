@@ -434,6 +434,7 @@ ag_error_t ag_apply_update(const char *zip_path, const char *launch_after)
              pi.dwProcessId, staging_dir.c_str());
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
+    return AG_OK;
 #else
     std::string updater_path = exe_dir + "/" + AG_UPDATER_NAME;
     if (access(updater_path.c_str(), X_OK) != 0) {
@@ -458,7 +459,128 @@ ag_error_t ag_apply_update(const char *zip_path, const char *launch_after)
         }
         _exit(1);
     }
+    return AG_OK;
+#endif
+}
+
+#ifdef _WIN32
+/* Read from pipe, break into lines, invoke log_cb per line.
+ * After pipe closes, wait for process, invoke done_cb with exit code. */
+static void pipe_reader_thread(HANDLE pipe_read, HANDLE process,
+                                ag_update_log_cb_t log_cb,
+                                ag_update_done_cb_t done_cb, void *ud)
+{
+    std::string buffer;
+    char buf[4096];
+    DWORD n = 0;
+    while (ReadFile(pipe_read, buf, sizeof(buf), &n, NULL) && n > 0) {
+        buffer.append(buf, n);
+        size_t start = 0;
+        for (size_t i = 0; i < buffer.size(); ++i) {
+            if (buffer[i] == '\n' || buffer[i] == '\r') {
+                if (i > start) {
+                    std::string line = buffer.substr(start, i - start);
+                    if (log_cb) log_cb(line.c_str(), ud);
+                }
+                start = i + 1;
+            }
+        }
+        buffer.erase(0, start);
+    }
+    if (!buffer.empty() && log_cb) log_cb(buffer.c_str(), ud);
+
+    CloseHandle(pipe_read);
+
+    DWORD exit_code = 1;
+    WaitForSingleObject(process, INFINITE);
+    GetExitCodeProcess(process, &exit_code);
+    CloseHandle(process);
+
+    if (done_cb) done_cb((int)exit_code, ud);
+}
 #endif
 
+ag_error_t ag_apply_update_with_log(const char *zip_path,
+                                     const char *launch_after,
+                                     ag_update_log_cb_t log_cb,
+                                     ag_update_done_cb_t done_cb,
+                                     void *user_data)
+{
+    if (!zip_path || !zip_path[0]) {
+        LOG_ERROR("ag_apply_update_with_log: invalid zip_path");
+        return AG_ERR_INTERNAL;
+    }
+
+#ifdef _WIN32
+    std::string exe_dir = get_exe_dir();
+    std::string original_updater = exe_dir + "\\" + AG_UPDATER_NAME + ".exe";
+    if (GetFileAttributesA(original_updater.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        LOG_ERROR("ag_apply_update_with_log: updater not found: %s",
+                  original_updater.c_str());
+        return AG_ERR_NOT_FOUND;
+    }
+
+    std::string staging_dir = stage_updater_files(exe_dir);
+    if (staging_dir.empty()) return AG_ERR_IO;
+    std::string staged_updater = staging_dir + "\\" + AG_UPDATER_NAME + ".exe";
+
+    /* Inheritable anonymous pipe so child's stdout/stderr flow back here. */
+    HANDLE pipe_read = NULL, pipe_write = NULL;
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    sa.lpSecurityDescriptor = NULL;
+    if (!CreatePipe(&pipe_read, &pipe_write, &sa, 0)) {
+        LOG_ERROR("ag_apply_update_with_log: CreatePipe failed (error=%lu)",
+                  GetLastError());
+        return AG_ERR_IO;
+    }
+    /* Parent's read end must NOT be inherited by child. */
+    SetHandleInformation(pipe_read, HANDLE_FLAG_INHERIT, 0);
+
+    std::string cmd_args = win_quote(staged_updater) + " " +
+                           win_quote(zip_path) + " --target " +
+                           win_quote(exe_dir);
+    if (launch_after && launch_after[0]) {
+        cmd_args += " --launch " + win_quote(launch_after);
+    }
+    LOG_DEBUG("ag_apply_update_with_log: cmd=%s", cmd_args.c_str());
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = pipe_write;
+    si.hStdError  = pipe_write;
+    si.hStdInput  = GetStdHandle(STD_INPUT_HANDLE);
+    memset(&pi, 0, sizeof(pi));
+
+    if (!CreateProcessA(staged_updater.c_str(), &cmd_args[0],
+                        NULL, NULL, TRUE,  /* bInheritHandles=TRUE */
+                        CREATE_NO_WINDOW, NULL, staging_dir.c_str(),
+                        &si, &pi)) {
+        LOG_ERROR("ag_apply_update_with_log: CreateProcessA failed (error=%lu)",
+                  GetLastError());
+        CloseHandle(pipe_read);
+        CloseHandle(pipe_write);
+        return AG_ERR_IO;
+    }
+
+    /* Parent must close its write end so the pipe breaks when child exits. */
+    CloseHandle(pipe_write);
+    CloseHandle(pi.hThread);
+
+    LOG_INFO("ag_apply_update_with_log: staged updater launched (pid=%lu)",
+             pi.dwProcessId);
+
+    std::thread reader(pipe_reader_thread, pipe_read, pi.hProcess,
+                       log_cb, done_cb, user_data);
+    reader.detach();
     return AG_OK;
+#else
+    (void)launch_after; (void)log_cb; (void)done_cb; (void)user_data;
+    LOG_ERROR("ag_apply_update_with_log: not implemented on this platform");
+    return AG_ERR_INTERNAL;
+#endif
 }

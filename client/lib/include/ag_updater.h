@@ -74,6 +74,27 @@ ag_error_t ag_apply_update(
     const char *launch_after
 );
 
+/* Log callback: invoked on a worker thread for each line from ag-updater
+ * stdout/stderr (no trailing newline). */
+typedef void (*ag_update_log_cb_t)(const char *line, void *user_data);
+
+/* Done callback: invoked on the same worker thread after ag-updater exits.
+ * exit_code is the child process exit code (0 = success). */
+typedef void (*ag_update_done_cb_t)(int exit_code, void *user_data);
+
+/**
+ * Launch ag-updater and stream its stdout/stderr to the given callback.
+ * Returns AG_OK immediately once the child is spawned; the worker thread
+ * owns the lifetime of the pipe read + child wait + callbacks.
+ */
+ag_error_t ag_apply_update_with_log(
+    const char *zip_path,
+    const char *launch_after,
+    ag_update_log_cb_t log_cb,
+    ag_update_done_cb_t done_cb,
+    void *user_data
+);
+
 #ifdef __cplusplus
 }
 #endif

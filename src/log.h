@@ -45,6 +45,7 @@ int log_level_from_name(const char *name);
     fprintf(fp, "[%s] [%02d:%02d:%02d.%03d] [%s:%d] " fmt "\n", \
             tag, _st.wHour, _st.wMinute, _st.wSecond, _st.wMilliseconds, \
             LOG_FILENAME, __LINE__, ##__VA_ARGS__); \
+    fflush(fp); \
     if (g_log_file) { \
         fprintf(g_log_file, "[%s] [%02d:%02d:%02d.%03d] [%s:%d] " fmt "\n", \
                 tag, _st.wHour, _st.wMinute, _st.wSecond, _st.wMilliseconds, \
@@ -64,6 +65,7 @@ int log_level_from_name(const char *name);
             tag, _tm.tm_hour, _tm.tm_min, _tm.tm_sec, \
             (int)(_tv.tv_usec / 1000), \
             LOG_FILENAME, __LINE__, ##__VA_ARGS__); \
+    fflush(fp); \
     if (g_log_file) { \
         fprintf(g_log_file, "[%s] [%02d:%02d:%02d.%03d] [%s:%d] " fmt "\n", \
                 tag, _tm.tm_hour, _tm.tm_min, _tm.tm_sec, \

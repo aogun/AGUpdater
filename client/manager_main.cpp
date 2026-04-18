@@ -46,7 +46,7 @@ static std::wstring utf8_to_wide(const std::string &utf8)
 
 /* Window dimensions */
 static const int WIN_W = 720;
-static const int WIN_H = 520;
+static const int WIN_H = 560;
 
 /* Global state */
 static HWND g_hwnd = NULL;
@@ -63,11 +63,14 @@ static HINSTANCE g_hinst = NULL;
 #define WM_DOWNLOAD_ERROR   (WM_APP + 3)
 #define WM_DOWNLOAD_PROGRESS (WM_APP + 4)
 #define WM_DOWNLOAD_DONE    (WM_APP + 5)
+#define WM_UPDATE_LOG       (WM_APP + 6)  /* lParam = malloc'd UTF-8 line */
+#define WM_UPDATE_DONE      (WM_APP + 7)  /* wParam = exit code */
 
 static std::vector<ag_version_info_t> g_versions;
 static std::mutex g_mutex;
 static int g_selected = -1;
 static bool g_downloading = false;
+static bool g_updating = false;  /* true while ag-updater is running */
 static int g_dl_percent = 0;
 static std::string g_dl_file_path;
 
@@ -81,6 +84,33 @@ static void do_refresh();
 static void do_download();
 static void update_detail();
 static void add_list_item(int index, const ag_version_info_t &info);
+
+/* Append a line (with trailing CRLF) to the detail/log EDIT control. */
+static void append_detail_line(const std::wstring &line)
+{
+    int len = GetWindowTextLengthW(g_detail);
+    SendMessageW(g_detail, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+    std::wstring with_nl = line + L"\r\n";
+    SendMessageW(g_detail, EM_REPLACESEL, FALSE, (LPARAM)with_nl.c_str());
+    SendMessageW(g_detail, EM_SCROLLCARET, 0, 0);
+}
+
+/* Callbacks invoked by ag_apply_update_with_log on a worker thread.
+ * Marshal the payload to the UI thread via PostMessage. */
+static void updater_log_cb(const char *line, void *)
+{
+    if (!line) return;
+    size_t n = strlen(line);
+    char *copy = (char *)malloc(n + 1);
+    if (!copy) return;
+    memcpy(copy, line, n + 1);
+    PostMessage(g_hwnd, WM_UPDATE_LOG, 0, (LPARAM)copy);
+}
+
+static void updater_done_cb(int exit_code, void *)
+{
+    PostMessage(g_hwnd, WM_UPDATE_DONE, (WPARAM)exit_code, 0);
+}
 
 static std::string format_size(int64_t bytes)
 {
@@ -273,16 +303,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             100, 260, 80, 28, hwnd, (HMENU)IDC_BTN_DOWNLOAD, g_hinst, NULL);
         EnableWindow(g_btn_download, FALSE);
 
-        /* Detail area */
-        g_detail = CreateWindowExW(WS_EX_CLIENTEDGE, L"STATIC", L"",
-            WS_CHILD | WS_VISIBLE | SS_LEFT,
-            10, 300, WIN_W - 40, 100,
+        /* Detail / update log area (readonly multiline EDIT for scrollback) */
+        g_detail = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL |
+            ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+            10, 300, WIN_W - 40, 140,
             hwnd, (HMENU)IDC_STATIC_DETAIL, g_hinst, NULL);
 
         /* Progress bar */
         g_progress = CreateWindowExW(0, PROGRESS_CLASSW, L"",
             WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
-            10, 410, WIN_W - 40, 20,
+            10, 450, WIN_W - 40, 20,
             hwnd, (HMENU)IDC_PROGRESS, g_hinst, NULL);
         SendMessage(g_progress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
         SendMessage(g_progress, PBM_SETPOS, 0, 0);
@@ -412,21 +443,57 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         int result = MessageBoxW(hwnd,
             L"Download complete. Install now?\n"
-            L"The application will close to apply the update.",
+            L"Update log will appear below; this window stays open.",
             L"Install Update", MB_YESNO | MB_ICONQUESTION);
 
         if (result == IDYES) {
-            ag_error_t err = ag_apply_update(fp.c_str(), NULL);
-            if (err == AG_OK) {
-                LOG_INFO("Updater launched, exiting manager");
-                PostQuitMessage(0);
-            } else {
+            /* Clear detail and stream ag-updater stdout/stderr into the
+             * readonly EDIT control so the user sees per-file progress. */
+            SetWindowTextW(g_detail, L"");
+            append_detail_line(L"--- Update starting ---");
+            g_updating = true;
+            EnableWindow(g_btn_download, FALSE);
+            EnableWindow(g_btn_refresh, FALSE);
+            ag_error_t err = ag_apply_update_with_log(
+                fp.c_str(), NULL, updater_log_cb, updater_done_cb, NULL);
+            if (err != AG_OK) {
                 LOG_ERROR("Failed to start updater, error=%d", (int)err);
-                MessageBoxW(hwnd, L"Failed to start updater.",
-                           L"Error", MB_OK | MB_ICONERROR);
+                wchar_t buf[128];
+                _snwprintf(buf, 128,
+                    L"Failed to start updater (error=%d).", (int)err);
+                append_detail_line(buf);
+                g_updating = false;
+                EnableWindow(g_btn_download, TRUE);
+                EnableWindow(g_btn_refresh, TRUE);
+                SendMessage(g_progress, PBM_SETPOS, 0, 0);
             }
+        } else {
+            SendMessage(g_progress, PBM_SETPOS, 0, 0);
+            EnableWindow(g_btn_download, TRUE);
+            EnableWindow(g_btn_refresh, TRUE);
         }
+        break;
+    }
 
+    case WM_UPDATE_LOG: {
+        char *line = (char *)lParam;
+        if (line) {
+            append_detail_line(utf8_to_wide(line));
+            free(line);
+        }
+        break;
+    }
+
+    case WM_UPDATE_DONE: {
+        int code = (int)wParam;
+        wchar_t buf[64];
+        if (code == 0) {
+            _snwprintf(buf, 64, L"--- Update complete ---");
+        } else {
+            _snwprintf(buf, 64, L"--- Update failed (exit code %d) ---", code);
+        }
+        append_detail_line(buf);
+        g_updating = false;
         SendMessage(g_progress, PBM_SETPOS, 0, 0);
         EnableWindow(g_btn_download, TRUE);
         EnableWindow(g_btn_refresh, TRUE);
@@ -475,6 +542,7 @@ static void add_list_item(int index, const ag_version_info_t &info)
 
 static void update_detail()
 {
+    if (g_updating) return;  /* Don't clobber the update log in progress. */
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_selected < 0 || g_selected >= (int)g_versions.size()) {
         SetWindowTextW(g_detail, L"Select a version to see details.");

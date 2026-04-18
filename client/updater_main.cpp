@@ -7,6 +7,7 @@
 #include "version.h"
 #include "log.h"
 
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -173,14 +174,35 @@ static std::string find_first_dir(unzFile zf)
     return std::string();
 }
 
-static bool extract_file(unzFile zf, const std::string &dest_path)
+/* Windows locks EXE/DLL contents while loaded, but leaves the filename free.
+ * If the caller (e.g. ag-manager) is still running, its ag-manager.exe cannot
+ * be overwritten directly — try renaming it out of the way, then create fresh. */
+static bool try_rename_locked(const std::string &path)
+{
+#ifdef _WIN32
+    char suffix[32];
+    snprintf(suffix, sizeof(suffix), ".old-%lu", (unsigned long)GetTickCount());
+    std::string bak = path + suffix;
+    if (MoveFileA(path.c_str(), bak.c_str())) {
+        LOG_INFO("Renamed locked file: %s -> %s", path.c_str(), bak.c_str());
+        return true;
+    }
+    LOG_WARN("Rename fallback failed for %s (error=%lu)",
+             path.c_str(), (unsigned long)GetLastError());
+#else
+    (void)path;
+#endif
+    return false;
+}
+
+static bool extract_file(unzFile zf, const std::string &dest_path,
+                          const std::string &rel_path)
 {
     if (unzOpenCurrentFile(zf) != UNZ_OK) {
-        LOG_ERROR("Failed to open entry in zip");
+        LOG_ERROR("FAIL %s: cannot open zip entry", rel_path.c_str());
         return false;
     }
 
-    /* Ensure parent directory exists */
     std::string parent;
     size_t last_sep = dest_path.find_last_of("/\\");
     if (last_sep != std::string::npos) {
@@ -188,20 +210,26 @@ static bool extract_file(unzFile zf, const std::string &dest_path)
         make_dirs(parent);
     }
 
-    /* Try to write file with retry for locked files */
+    /* Try to open for write with retry; final fallback renames locked target. */
     FILE *out = NULL;
     for (int attempt = 0; attempt < RETRY_COUNT; ++attempt) {
         out = fopen(dest_path.c_str(), "wb");
         if (out != NULL) break;
         if (attempt < RETRY_COUNT - 1) {
-            LOG_WARN("File locked, retry %d/%d: %s",
-                     attempt + 1, RETRY_COUNT - 1, dest_path.c_str());
+            LOG_WARN("File locked, retry %d/%d: %s (errno=%d %s)",
+                     attempt + 1, RETRY_COUNT - 1, dest_path.c_str(),
+                     errno, strerror(errno));
             sleep_ms(RETRY_DELAY_MS);
         }
     }
 
+    if (out == NULL && try_rename_locked(dest_path)) {
+        out = fopen(dest_path.c_str(), "wb");
+    }
+
     if (out == NULL) {
-        LOG_ERROR("Cannot write: %s", dest_path.c_str());
+        LOG_ERROR("FAIL %s: cannot write (errno=%d %s)",
+                  rel_path.c_str(), errno, strerror(errno));
         unzCloseCurrentFile(zf);
         return false;
     }
@@ -209,23 +237,31 @@ static bool extract_file(unzFile zf, const std::string &dest_path)
     char buf[READ_BUF_SIZE];
     int bytes_read;
     bool ok = true;
+    int64_t total_written = 0;
 
     while ((bytes_read = unzReadCurrentFile(zf, buf, sizeof(buf))) > 0) {
         if (fwrite(buf, 1, static_cast<size_t>(bytes_read), out) !=
             static_cast<size_t>(bytes_read)) {
-            LOG_ERROR("Write error: %s", dest_path.c_str());
+            LOG_ERROR("FAIL %s: write error at offset %lld (errno=%d %s)",
+                      rel_path.c_str(), (long long)total_written,
+                      errno, strerror(errno));
             ok = false;
             break;
         }
+        total_written += bytes_read;
     }
 
     if (bytes_read < 0) {
-        LOG_ERROR("Read error from zip");
+        LOG_ERROR("FAIL %s: read error from zip", rel_path.c_str());
         ok = false;
     }
 
     fclose(out);
     unzCloseCurrentFile(zf);
+
+    if (ok) {
+        LOG_INFO("OK   %s (%lld bytes)", rel_path.c_str(), (long long)total_written);
+    }
     return ok;
 }
 
@@ -267,6 +303,11 @@ static bool launch_program(const std::string &dir, const std::string &program)
 
 int main(int argc, char *argv[])
 {
+    /* Unbuffered stdout/stderr so pipe readers (e.g. ag-manager) see logs
+     * in real time instead of getting them buffered until process exit. */
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
     log_init_file("ag-updater.log");
     LOG_INFO("ag-updater v%s", APP_VERSION_STRING);
 
@@ -393,8 +434,8 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        LOG_DEBUG("Extract: %s", rel_path.c_str());
-        if (extract_file(zf, dest)) {
+        LOG_INFO("-> %s", rel_path.c_str());
+        if (extract_file(zf, dest, rel_path)) {
             ++extracted;
         } else {
             ++errors;
