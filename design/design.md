@@ -875,7 +875,12 @@ AGUpdater/
 │   ├── log.h                   # 日志系统头文件
 │   └── log.cpp                 # 日志系统实现
 ├── data/
-│   └── config.json             # 服务器示例配置文件
+│   ├── config.json             # 服务器示例配置（HTTP 模式）
+│   ├── config.https.json       # 服务器示例配置（HTTPS 模式，引用 certs/）
+│   └── certs/                  # 本地 HTTPS 测试用的自签名证书
+│       ├── server.crt          # 10 年有效期，SAN=localhost/127.0.0.1/0.0.0.0
+│       ├── server.key          # 未加密的 RSA 2048 私钥
+│       └── README.md           # 使用与重新生成说明
 └── third_party/                # 第三方依赖
     ├── sqlite3/
     ├── cpp-httplib/            # HTTP(S) 服务器/客户端
